@@ -19,12 +19,20 @@ Feature: SSGA
 
     Scenario: NAM Select Parents
 	Given I have a SSGA algorithm
+	When I init the population with 50
+	When I select parents with tournament size 3
+	Then the parents are different after 300 tests
+
+    Scenario: NAM Select Parents
+	Given I have a SSGA algorithm
 	When I init the population with 3
+	When I select parents with tournament size 2
 	Then the parents are different after 300 tests
 
     Scenario: NAM Select Parents
 	Given I have a SSGA algorithm
 	When I init the population with 2
+	When I select parents with tournament size 1
 	Then the parents are different after 2 tests
 
     Scenario: Crossover with itself

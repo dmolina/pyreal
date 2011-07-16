@@ -1,6 +1,6 @@
 import numpy as np
 from numpy import random,array
-from utils import distance
+from cutils import getRemoteVector,getFromPermutation
 
 class SSGA:
     """
@@ -58,24 +58,19 @@ class SSGA:
 
     def getParents(self,tsize=3):
 	"""
-	Get the parents using the NAM selection method. 
+	Get the parents using the NAM selection 
 	Mother is randomly selected.
 	Parent is selected by competition between tsize random individuals (the individual which best/lower fitness is selected)
 
 	Return [mother,parents] the position of individual to be crossed
 	"""
-	values = random.permutation(self.popsize)
+	values = getFromPermutation(self.popsize, tsize+1)
 	motherId = values[0]
-	mother = self.values[motherId]
 	# parents 
-	idParents = values[1:(tsize+1)]
+	idParents = values[1:]
+	mother = self.values[motherId]
 	Parents = self.values[idParents]
-	dif=(Parents-mother)
-	distanceParents = np.sqrt((dif*dif).sum(axis=1))
-	#distanceParents = [distance(self.values[p], mother) for p in idParents])
-	#distanceParents = [distance(parent, mother) for parent in Parents]
-	idBestParent = np.argmin(distanceParents)
-	parentId = idParents[idBestParent]
+	parentId = idParents[getRemoteVector(Parents,mother)]
 	return [motherId,parentId]
 
     def cross(self,mother,parent,alpha=0.5):

@@ -53,6 +53,22 @@ def distances(ind1,ind2):
     sum = (dif*dif).sum(axis=1)
     return np.sqrt(sum)
 
+def getRemoteVector(vectors,reference):
+    """
+    Get the more remote parents
+
+    Parents -- Matrix with the different individual to compare
+    Mother -- Reference individual
+
+    Returns index of the most remote individual 
+    """
+    dif=(vectors-reference)
+    distances = np.sqrt((dif*dif).sum(axis=1))
+    return np.argmax(distances)
+
+def getFromPermutation(max, num):
+    values = np.random.permutation(max)
+    return values[0:(num+1)]
 
 def test():
     import doctest

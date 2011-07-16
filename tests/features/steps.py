@@ -71,9 +71,9 @@ def best_parent(step):
     mother = population[motherId]
     parent = population[parentId]
     distances = [utils.distance(population[i],mother) for i in range(world.popsize) if i != motherId]
-    min_distances = np.array(distances).min()
+    max_distances = np.array(distances).max()
     distance = utils.distance(parent, mother)
-    assert distance == min_distances, "Distance %f is upper than %f" %(distance, min_distances)
+    assert distance == max_distances, "Distance %f is lower than %f" %(distance, max_distances)
 
 @step('I cross with alpha ([\d.]+)')
 def apply_cross(self,alpha):
