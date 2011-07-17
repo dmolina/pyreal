@@ -1,0 +1,7 @@
+sudo aptitude install zeromq-bin python-numpy
+# Install the pip installer
+sudo aptitude install python-pip
+# Install the pyzmq
+sudo easy_install pyzmq
+# Install the lettuce test
+sudo pip install lettuce
