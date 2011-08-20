@@ -4,6 +4,7 @@ import numpy as np
 from numpy import random
 import math
 from scipy import weave
+import earandom as random
 
 #def distance(np.array[double,ndim=1] ind1, np.array[double,ndim=1] ind2):
 #    """
@@ -103,7 +104,7 @@ def getFromPermutation(max, num):
 	free(arange);
     """
     assert num <= max
-    rand = random.rand(max, size=num)
+    rand = random.randreal(0, max, size=num)
     results = np.array(np.zeros(num,dtype=np.int8))
     weave.inline(code, ['rand','max','num','results'])
     return results
@@ -160,7 +161,7 @@ def crossBLX(mother,parent,domain,alpha):
     dim = mother.size
     m = mother
     p = parent
-    r = random.uniform(0,1,dim)
+    r = random.randreal(0,1,dim)
     c = np.array(np.zeros(dim))
     [lower,upper]=domain
     weave.inline(code, ["m","p","r","alpha","lower","upper","c"])
@@ -219,7 +220,7 @@ def getParentByNAM(motherId,values,popsize,tsize=3):
     }
     free(parents);
     """
-    rand = random.rand(tsize)
+    rand = random.randreal(0.0, 1.0, tsize)
     max = popsize
     num = tsize
     d = values
