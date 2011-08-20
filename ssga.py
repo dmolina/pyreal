@@ -1,6 +1,6 @@
 import numpy as np
 from numpy import random,array
-from cutils import getRemoteVector,getFromPermutation
+from cutils import getParentByNAM,crossBLX
 
 class SSGA:
     """
@@ -64,24 +64,12 @@ class SSGA:
 
 	Return [mother,parents] the position of individual to be crossed
 	"""
-	values = getFromPermutation(self.popsize, tsize+1)
-	motherId = values[0]
-	# parents 
-	idParents = values[1:]
-	mother = self.values[motherId]
-	Parents = self.values[idParents]
-	parentId = idParents[getRemoteVector(Parents,mother)]
+	motherId = np.random.randint(self.popsize, size=1)[0]
+	parentId = getParentByNAM(motherId,self.values, self.popsize, tsize)
 	return [motherId,parentId]
 
     def cross(self,mother,parent,alpha=0.5):
-	diff = abs(mother-parent)
-	I=diff*alpha
-	points = np.array([mother,parent])
-	A=np.amin(points,axis=0)-I
-	B=np.amax(points,axis=0)+I
-	children = random.uniform(A,B,self.dim)
-	[low,high]=self.domain
-	return np.clip(children, low, high)
+	return crossBLX(mother,parent,self.domain,alpha)
 
     def crossSlow(self,mother,parent,alpha=0.5):
 	diff = abs(mother-parent)

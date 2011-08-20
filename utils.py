@@ -66,9 +66,54 @@ def getRemoteVector(vectors,reference):
     distances = np.sqrt((dif*dif).sum(axis=1))
     return np.argmax(distances)
 
-def getFromPermutation(max, num):
+def getFromPermutation(reference, max, num):
     values = np.random.permutation(max)
-    return values[0:(num+1)]
+    values2 = [x for x in values if x != reference]
+    return values2[0:(num+1)]
+
+def crossBLX(mother,parent,domain,alpha):
+    """
+    crossover operator BLX-alpha
+    
+    mother -- mother (first individual)
+    parent -- parent (second individual)
+    domain -- domain to check
+    alpha  -- parameter alpha
+
+    Returns the new children following the expression children = random(x-alpha*dif, y+alpha*dif), 
+		where dif=abs(x,y) and x=lower(mother,parents), y=upper(mother,parents) 
+
+    >>> import numpy as np
+    >>> low=-5
+    >>> upper = 5
+    >>> dim=30
+    >>> sol = np.array([1,2,3,2,1])
+    >>> crossBLX(sol,sol,[low,upper],0)
+    array([ 1.,  2.,  3.,  2.,  1.])
+    """
+    diff = abs(mother-parent)
+    dim = mother.size
+    I=diff*alpha
+    points = np.array([mother,parent])
+    A=np.amin(points,axis=0)-I
+    B=np.amax(points,axis=0)+I
+    children = np.random.uniform(A,B,dim)
+    [low,high]=domain
+    return np.clip(children, low, high)
+
+def getParentByNAM(motherId,values,popsize,tsize=3):
+    """
+    Get the parent using the NAM selection 
+    Parent is selected by competition between tsize random individuals (the individual which best/lower fitness is selected)
+    
+    Return the parent more distant from motherId
+    """
+    random = getFromPermutation(motherId, popsize, tsize+1)
+    # parents 
+    idParents = random[1:]
+    mother = values[motherId]
+    Parents = values[idParents]
+    return idParents[getRemoteVector(Parents,mother)]
 
 def test():
     import doctest

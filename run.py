@@ -18,8 +18,9 @@ def main():
     Main program
     """
     domain = [-5, 5]
-    ea = SSGA(domain=domain, size=60, dim=30, fitness=fitness_sphere)
-    ea.run(maxeval=100000)
+    dim=10
+    ea = SSGA(domain=domain, size=60, dim=dim, fitness=fitness_sphere)
+    ea.run(maxeval=dim*10000)
     [bestsol, bestfit] = ea.getBest()
     print "Best: %f\n" %bestfit
 def test():

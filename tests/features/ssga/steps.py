@@ -70,10 +70,10 @@ def best_parent(step):
     population = ssga.population()
     mother = population[motherId]
     parent = population[parentId]
-    distances = [utils.distance(population[i],mother) for i in range(world.popsize) if i != motherId]
+    distances = [utils.distance(population[i],mother) for i in range(world.popsize)]
     max_distances = np.array(distances).max()
     distance = utils.distance(parent, mother)
-    assert distance == max_distances, "Distance %f is lower than %f" %(distance, max_distances)
+    assert distance == max_distances, "Distance from parent %f is different than maximum %f" %(distance, max_distances)
 
 @step('I cross with alpha ([\d.]+)')
 def apply_cross(self,alpha):
@@ -94,9 +94,18 @@ def cross_set_random(step):
     world.mother = population[motherId]
     world.parent= population[parentId]
 
+
+@step('I use uniform with values=(\d+)')
+def set_uniform(step, values, mock_uniform):
+    uniform.side_effect = get_values(lambda u, v, dim: u+(v-u)*v)
+
 @step('The children is the same')
 def has_same_children(self):
     assert utils.distance(world.children, world.parent)==0, "Son distintos"
+
+@step(u'When I use in crossover pseudorandoms=0')
+def when_i_use_in_crossover_pseudorandoms_0(step):
+    assert False, 'This step must be implemented'
 
 @step('The children is between them')
 def is_between_then(self):
