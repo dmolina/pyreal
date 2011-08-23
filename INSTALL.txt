@@ -3,5 +3,9 @@ sudo aptitude install zeromq-bin python-numpy
 sudo aptitude install python-pip
 # Install the pyzmq
 sudo easy_install pyzmq
+# Install the mock
+sudo easy_install "mock==0.7.2"
+# Install the python-aspects
+sudo aptitude install python-aspects
 # Install the lettuce test
 sudo pip install lettuce

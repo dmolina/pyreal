@@ -1,10 +1,15 @@
 from lettuce import *
 import numpy as np
 from numpy import random
+from mock import patch, Mock
 from ssga import SSGA
+import aspects
 import utils
 
+world.numevals = 0
+
 def fitness(sol):
+    world.numevals += 1
     return (sol**2).sum()
 
 domain = [-5, 5]
@@ -95,22 +100,101 @@ def cross_set_random(step):
     world.parent= population[parentId]
 
 
-@step('I use uniform with values=(\d+)')
-def set_uniform(step, values, mock_uniform):
-    uniform.side_effect = get_values(lambda u, v, dim: u+(v-u)*v)
-
 @step('The children is the same')
 def has_same_children(self):
     assert utils.distance(world.children, world.parent)==0, "Son distintos"
 
-@step(u'When I use in crossover pseudorandoms=0')
-def when_i_use_in_crossover_pseudorandoms_0(step):
-    assert False, 'This step must be implemented'
+@step(u'When I use pseudorandoms=([\d.]+)')
+def when_i_use_in_crossover_pseudorandoms_0(step, expected_random):
+    world.patchRandom = patch('earandom.randreal', spec=True)
+    world.random = world.patchRandom.start()
+    expected_random = float(expected_random)
+    world.random.return_value = expected_random*np.ones(dim)
+#    world.patchRandom.stop()
+
+@before.all
+def init_random():
+    world.patchRandom = None
+
+def finish_random(rand):
+    world.patchRandom.stop()
+
+@step('The children is equals to the (\w+) of its parents')
+def children_equals(self,strother):
+    if (strother == 'minimum'):
+	other = np.amin([world.mother, world.parent], axis=0)
+    elif (strother == 'maximum'):
+	other = np.amax([world.mother, world.parent], axis=0)
+    elif (strother == 'mean'):
+	other = 0.5*(world.mother+world.parent)
+    else:
+	assert False, "Error, criterion '%s' is not known" %strother
+ 
+#    print world.mother
+#    print world.parent
+#    print world.children
+#    print "\n"
+    assert (world.children == other).all(), "Children is not equals to the '%s' of its parents" %strother
+    finish_random(world.patchRandom)
 
 @step('The children is between them')
 def is_between_then(self):
     parents = np.array([world.mother,world.parent])
     min_parent = np.amin(parents,axis=0)
     max_parent = np.amax(parents,axis=0)
+#    print world.mother
+#    print world.parent
+#    print world.children
+#    print "\n"
     assert (world.children >= min_parent).all(), "Brokes inferior limit"
     assert (world.children <= max_parent).all(), "Brokes superior limit"
+
+world.fitEval=[]
+world.get_fitness = None
+
+def measureFitness(*args, **kwargs):
+    if world.fitEval == []:
+	world.fitEval.append(world.get_fitness(world.ssga.population_fitness()))
+
+    yield aspects.proceed
+    world.fitEval.append(world.get_fitness(world.ssga.population_fitness()))
+    
+@step('I study the evolution of the (\w+) individual')
+def study_population(self, individual):
+
+    if individual == 'best':
+	world.get_fitness = np.min
+    elif individual == 'worst':
+	world.get_fitness = np.max
+    elif individual == 'mean':
+	world.get_fitness = np.mean 
+    else:
+	assert False, "Error, individual '%s' is not known" %individual
+
+    world.wrap_id = aspects.with_wrap(measureFitness, SSGA.updateWorst)
+
+@step('I run the algorithm during (\d+) iterations')
+def run_iterations(self,numevals):
+    numevals = int(numevals)
+    world.fitEval = []
+    world.numevals = 0
+    world.ssga.run(maxeval=numevals)
+
+@step('they were evaluated (\d+) solutions')
+def check_eval(self,solutions):
+    assert world.numevals == int(solutions), "There wwere expected %d and not %s evaluations" %(world.numevals, solutions)
+
+@step('its fitness is always better')
+def check_fitness(self):
+    size = len(world.fitEval)
+    fitEval = world.fitEval
+#    i = 0
+#    for fit in fitEval:
+#	i += 1
+#	print "%d: %s" %(i,fit)
+
+    for eval in xrange(size-1):
+	before = float(fitEval[eval])
+	after = float(fitEval[eval+1])
+	assert after <= before, "In iteration %d fitness %f is lower than %f" %(eval,after, before)
+    aspects.without_wrap(measureFitness, world.ssga.updateWorst)

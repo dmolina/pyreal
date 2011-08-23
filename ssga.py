@@ -89,10 +89,11 @@ class SSGA:
 	# Init the population
 	if self.values.size ==0:
 	    self.initPopulation(self.popsize)
-	
-	# While numevals is not enough
-	numevals = 0
+	    numevals = self.popsize
+	else:
+	    numevals = 0
 
+	# While numevals is not enough
 	while numevals < maxeval:
 	    [motherId,parentId] = self.getParents()
 	    mother = self.values[motherId]
@@ -108,6 +109,8 @@ class SSGA:
              #   if (numevals % 50)==0:
              #       print "%d: %f" %(numevals,  fit_children)
                 self.updateWorst()
+
+	return numevals
 
     def getBest(self):
         best_sol = self.values[self.best]

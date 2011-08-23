@@ -7,14 +7,21 @@ Feature: SSGA Crossover
 	When I cross with alpha 0
 	Then the children is the same
 
-   Scenario: NAM Select Parents
+   Scenario: Checking crossover with seudorandoms and alpha=0
 	Given I have a SSGA algorithm
 	When I init the population with 50
 	When I set randomly two parents
-	When I use in crossover pseudorandoms=0
-	Then the children is between them
+	When I use pseudorandoms=<seudo_random>
+	When I cross with alpha 0
+	Then the children is equals to the <criterion> of its parents
 
-    Scenario: Crossing with alpha=0.5 
+    Examples:
+	| seudo_random | criterion |
+	|   0          |  minimum  | 
+	|   1          |  maximum  |
+	|   0.5        |  mean     |
+    
+    Scenario: Crossing with alpha=0 is between them
 	Given I have a SSGA algorithm
 	When I init the population with 50
 	When I set randomly two parents
