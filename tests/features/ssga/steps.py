@@ -25,6 +25,7 @@ def init_population(step,popsize):
     world.popsize = int(popsize)
     world.ssga.initPopulation(int(popsize))
 
+
 @step('popsize is right')
 def popsize_right(step):
     (values_size,values_dim)=world.ssga.population().shape
@@ -198,3 +199,46 @@ def check_fitness(self):
 	after = float(fitEval[eval+1])
 	assert after <= before, "In iteration %d fitness %f is lower than %f" %(eval,after, before)
     aspects.without_wrap(measureFitness, world.ssga.updateWorst)
+
+@step('I set the mutation rate to (.+)')
+def set_mutation_rate(step, mutation_rate):
+    mutation_rate = float(mutation_rate)
+    world.ssga.set_mutation_rate(mutation_rate)
+    assert world.ssga.mutation_rate == mutation_rate
+
+@step('I apply the mutation to (\d+) individuals')
+def apply_mutation_to(step,number):
+    num = int(number)
+    world.inds_before_mutation = []
+    world.inds_after_mutation = []
+
+    for i in xrange(num):
+	sol = random.rand(dim)
+	world.inds_before_mutation.append(sol)
+	world.inds_after_mutation.append(world.ssga.mutation(sol))
+#	print sol
+#	print world.ssga.mutation(sol)
+	assert len(world.inds_after_mutation)==len(world.inds_before_mutation), "Mutation does not return individuals"
+
+@step('about (\d+) individuals have been modified with range error (.+)')
+def check_mutated(step,expected_changed,ratio):
+    num = len(world.inds_before_mutation)
+    expected = int(expected_changed)
+    ratio = float(ratio)
+    num_changed = 0
+
+    for i in xrange(num):
+	is_equals = (world.inds_before_mutation[i] == world.inds_after_mutation[i]).all()
+
+	if not is_equals:
+	    num_changed += 1
+
+    assert abs(num_changed-expected)<=ratio, "Solution mutated are too different: %d expected and %d received" %(expected,num_changed)
+
+@step('the mutated individuals differ only in 1 gen')
+def check_change_1_gen(step):
+    num = len(world.inds_before_mutation)
+
+    for i in xrange(num):
+	differ = (world.inds_before_mutation[i] != world.inds_after_mutation[i]).sum()
+	assert differ == 1, "Error: Differ in %d gens" %differ

@@ -1,5 +1,6 @@
 import numpy as np
-from numpy import random,array
+from numpy import array
+import earandom as random
 from cutils import getParentByNAM,crossBLX
 
 class SSGA:
@@ -22,6 +23,14 @@ class SSGA:
 	self.dim=dim
 	self.values = array([])
 	self.fit_values = array([])
+	self.set_mutation_rate(0.125)
+
+    def set_mutation_rate(self,value):
+	"""
+	Sets a new mutation rate (% of mutation for individual)
+	"""
+	self.mutation_rate =value 
+	self.mutationBGA_diff = [] 
 
     def population(self):
 	""""
@@ -29,6 +38,31 @@ class SSGA:
 	"""
 	return self.values[:]
 
+
+    def mutation(self, sol):
+	"""
+	Applies a mutation to the solution 
+	sol -- solution to be muted (if it is required)
+	"""
+        def mutationBGA(value):
+	    pieces=16
+    
+	    if len(self.mutationBGA_diff)==0:
+		self.mutationBGA_diff = np.ones(pieces)/(2**np.arange(pieces))
+
+	    return value+(random.randbool(pieces)*self.mutationBGA_diff).sum()
+        
+	newsol = sol
+
+	if (self.mutation_rate > 0):
+
+	    if  (random.rand()<=self.mutation_rate):
+		newsol = np.copy(sol)
+		pos = random.randint(0, self.dim-1)
+		newsol[pos] = mutationBGA(newsol[pos])
+            
+	return newsol
+    
     def population_fitness(self):
 	"""
 	Returns the fitness of each solution
@@ -43,7 +77,7 @@ class SSGA:
 	total = self.dim*self.popsize
 	[low,high]=self.domain
 	# Init the population
-	totalvalues = random.uniform(low,high, total)
+	totalvalues = random.randreal(low,high, total)
 	self.values = np.resize(totalvalues,(self.popsize,self.dim))
 	self.fit_values = array([self.fitness(sol) for sol in self.values])
 
@@ -98,7 +132,10 @@ class SSGA:
 	    [motherId,parentId] = self.getParents()
 	    mother = self.values[motherId]
             parent = self.values[parentId]
+	    # Crossover
 	    children = self.cross(mother,parent)
+	    # Mutation
+	    children = self.mutation(children)
             fit_children = self.fitness(children) 
             numevals += 1
             self.updateWorst()
