@@ -22,10 +22,13 @@ def main():
     ea = SSGA(domain=domain, size=60, dim=dim, fitness=fitness_sphere)
     ea.run(maxeval=dim*10000)
     [bestsol, bestfit] = ea.getBest()
-    print "Best: %f\n" %bestfit
+    print "Best: %e\n" %bestfit
 def test():
     import doctest
     doctest.testmod()
  
 if __name__ == "__main__":
+#    import psyco
+#    psyco.log()
+#    psyco.profile(0.2)
     main()

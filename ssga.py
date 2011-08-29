@@ -1,7 +1,8 @@
 import numpy as np
 from numpy import array
 import earandom as random
-from cutils import getParentByNAM,crossBLX
+#import pyximport; pyximport.install(); import cutils
+from cutils import getParentByNAM,crossBLX,applyMutationBGA
 
 class SSGA:
     """
@@ -51,6 +52,8 @@ class SSGA:
 		self.mutationBGA_diff = np.ones(pieces)/(2**np.arange(pieces))
 
 	    return value+(random.randbool(pieces)*self.mutationBGA_diff).sum()
+	    # TODO: Fixme
+	    #return value+applyMutationBGA(random.randbool(pieces), self.mutationBGA_diff)
         
 	newsol = sol
 

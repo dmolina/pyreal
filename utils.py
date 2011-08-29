@@ -115,6 +115,9 @@ def getParentByNAM(motherId,values,popsize,tsize=3):
     Parents = values[idParents]
     return idParents[getRemoteVector(Parents,mother)]
 
+def applyMutationBGA(randbool, mutationdiff):
+    return (randbool*mutationdiff).sum()
+
 def test():
     import doctest
     doctest.testmod()
