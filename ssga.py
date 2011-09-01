@@ -2,7 +2,7 @@ import numpy as np
 from numpy import array
 import earandom as random
 #import pyximport; pyximport.install(); import cutils
-from cutils import getParentByNAM,crossBLX,applyMutationBGA
+from cutils import getParentByNAM,crossBLX,applyMutationBGA,getBestWorst
 
 class SSGA:
     """
@@ -85,9 +85,8 @@ class SSGA:
 	self.fit_values = array([self.fitness(sol) for sol in self.values])
 
     def updateWorst(self):
-	self.best = np.argmin(self.fit_values)
+	[self.best,self.worst] = getBestWorst(self.fit_values)
 	self.best_fitness = self.fit_values[self.best]
-	self.worst = np.argmax(self.fit_values)
 	self.worst_fitness = self.fit_values[self.worst]
 
     def updateBest(self):

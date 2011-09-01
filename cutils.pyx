@@ -200,6 +200,28 @@ def getParentByNAM(int motherId,np.ndarray[DTYPE_t, ndim=2] pop, int popsize, in
 def applyMutationBGA(np.ndarray[BTYPE_t, ndim=1] randbool, np.ndarray[DTYPE_t, ndim=2] mutationdiff):
     return (randbool*mutationdiff).sum()
 
+def getBestWorst(np.ndarray[DTYPE_t, ndim=1] fitness):
+    cdef unsigned best, worst
+    cdef double fit, maxfit, minfit
+    cdef unsigned i
+    cdef unsigned size 
+
+    size = fitness.shape[0]
+    minfit = maxfit = fitness[0]
+    best = worst = 0
+
+    for i in range(size):
+        fit = fitness[i]
+        
+        if fit < minfit:
+            minfit = fit
+            best = i
+        elif fit > maxfit:
+            maxfit = fit
+            worst = i
+
+    return [best,worst]
+
 def test():
     import doctest
     doctest.testmod()
