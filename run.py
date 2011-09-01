@@ -1,4 +1,5 @@
 from ssga import SSGA
+from optparse import OptionParser
 import numpy
 
 def fitness_sphere(sol):
@@ -17,6 +18,10 @@ def main():
     """
     Main program
     """
+    parser = OptionParser()
+    parser.add_option("-f", "--function", action="store", type="int", dest="function", help="set the function to optimise", metavar="FUNCTION")
+
+    
     domain = [-5, 5]
     dim=10
     ea = SSGA(domain=domain, size=60, dim=dim, fitness=fitness_sphere)

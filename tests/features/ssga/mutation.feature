@@ -10,9 +10,9 @@ Feature: SSGA Mutation
 	| mutation_rate | num_select | num_expected | diff | 
 	|       0       |      100   |    0          |  0  |
 	|       1       |       10   |   10          |  0  |
-	|       0.5     |       20   |   10          |  2  | 
-	|       0.5     |      100   |   50          | 10  | 
-	|       0.1     |      100   |   10          | 10  | 
+	|       0.5     |       20   |   10          |  3  | 
+	|       0.5     |      100   |   50          | 20  | 
+	|       0.1     |      100   |   10          | 20  | 
 
     Scenario: Mutation of one gene
 	Given I have a SSGA algorithm
