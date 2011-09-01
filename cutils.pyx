@@ -1,6 +1,8 @@
+# cython: boundscheck=False
 import math
 import numpy as np
 cimport numpy as np
+cimport cython
 import earandom as random
 DTYPE = np.double
 ctypedef np.double_t DTYPE_t
@@ -122,14 +124,16 @@ def crossBLX(np.ndarray[DTYPE_t, ndim=1] mother,np.ndarray[DTYPE_t, ndim=1] pare
     array([ 1.,  2.,  3.,  2.,  1.])
     """
     cdef np.ndarray[DTYPE_t, ndim=1] C, r
-    cdef int low, high, i, dim
+    cdef int low, high, dim
+    cdef double x, y
     cdef double I, A, B
+    cdef unsigned i
     [low,high]=domain
     dim = mother.shape[0]
     C = np.zeros(dim)
     r = random.randreal(0,1,dim)
 
-    for i in xrange(dim):
+    for i in range(dim):
         if mother[i] < parent[i]:
            (x,y) = (mother[i],parent[i])
         else:
@@ -158,39 +162,38 @@ def getParentByNAM(int motherId,np.ndarray[DTYPE_t, ndim=2] pop, int popsize, in
     cdef np.ndarray[DTYPE_t,ndim=1] rand
     cdef np.ndarray[np.int_t,ndim=1] arange
     cdef int parent,max, ref
-    cdef double value, dif, maxdif
-    cdef int limit, posi, dim
-    cdef np.ndarray[DTYPE_t,ndim=1] parents
+    cdef double value, dist, maxdist
+    cdef int dim, parentId, limit
+    cdef np.ndarray[DTYPE_t,ndim=1] ind, ind_ref
+    cdef unsigned i, j, posi
 
     rand = random.randreal(0.0, 1.0, tsize)
     dim = pop.shape[1]
     ref = motherId
     max = popsize
     # Init the permutation
-    parents = np.zeros(tsize)
     arange = np.arange(0, max)
     arange[ref] = arange[max-1]
     max -= 1
+    ind_ref = pop[ref]
+    maxdist = -1
 
     # Get the random individuals
     for i in range(tsize):
         limit = (max-i-1)
         posi = round(rand[i]*limit)
-        parents[i] = arange[posi]
+        parent = arange[posi]
         arange[posi] = arange[limit]
-
-    # Calculate the futher individual
-    for i in range(tsize):
-        posi = parents[i]
+        ind = pop[parent]
         dist = 0
         
         for j in range(dim):
-            value = pop[posi,j] - pop[ref, j]
-            dist += value*value
+            value = ind[j] - ind_ref[j]
+            dist += value**2
         
-        if (dist > maxdist or maxdist < 0):
+        if dist > maxdist or maxdist < 0:
             maxdist = dist
-            parentId = posi
+            parentId = parent
 
     return parentId
 

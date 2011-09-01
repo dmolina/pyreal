@@ -118,6 +118,11 @@ def getParentByNAM(motherId,values,popsize,tsize=3):
 def applyMutationBGA(randbool, mutationdiff):
     return (randbool*mutationdiff).sum()
 
+def getBestWorst(self, fitness):
+    best = np.argmin(fitness)
+    worst = np.argmax(fitness)
+    return [best,worst]
+
 def test():
     import doctest
     doctest.testmod()
