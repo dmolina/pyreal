@@ -12,6 +12,7 @@ ENDIF()
 
 FIND_PACKAGE(Boost 1.42.0 COMPONENTS python REQUIRED)
 find_package(PythonLibs REQUIRED)
+ADD_SUBDIRECTORY(cec2005)
 
 link_directories (
     ${Boost_LIBRARIES} 

@@ -23,6 +23,7 @@ import subprocess                 # For issuing commands to the OS.
 import os
 import sys                        # For determining the Python version.
 from ssga import SSGA
+import libpycec2005 as cec2005
 import aspects
 
 #
@@ -100,19 +101,42 @@ def fitness_rosenbrock(sol):
 	F += 100*pow(pow(sol[i], 2)-sol[i+1], 2)+pow(sol[i]-1, 2)
     return F
 
+if len(sys.argv)<=1:
+    sys.exit("Lacking the function value")
 
-# Initialize variables needed to create and store the example data set.
-numberOfTimeSteps = 200   # Number of frames we want in the movie.
-# Init the ssga
-domain = [-5, 5]
+fun = int(sys.argv[1])
+
+if (fun <= 0 or fun > 25):
+    sys.exit("Function %d non valide" %fun)
+
+if len(sys.argv)>2:
+    fname = sys.argv[2]
+else:
+    fname = 'output'
+
+# Init cec2005
 dim=2
-function_fitness = fitness_sphere
-ea = SSGA(domain=domain, size=50, dim=dim, fitness=function_fitness)
+cec2005.config(fun, dim)
+domain = cec2005.domain(fun)
+#domain = [-5,5]
+
+#function_fitness = fitness_sphere
+#function_fitness = fitness_rosenbrock
+function_fitness = cec2005.evaluate
+
+def algorithm_fitness(sol):
+    global eval
+    eval += 1
+    global function_fitness
+    return function_fitness(sol)
+
+ea = SSGA(domain=domain, size=50, dim=dim, fitness=algorithm_fitness)
+# Initialize variables needed to create and store the example data set.
+numberOfTimeSteps = 100  
+stepframe=5 # Number of frames we want in the movie.
 
 # Create an array of zeros and fill it with the example data.
-print 'Done.'                       # Let the user know what's happening.
 frame=0
-stepframe=5
 
 def save():
     global eval
@@ -126,15 +150,30 @@ def save():
 line = None
 fig = None
 
+def scale_var(value):
+    """
+    This function scale the variable to the coordinate required for the image
+    """
+    global domain
+    minvar = domain[0]
+    scale = domain[1]-domain[0]
+    rangevar=400/scale
+#    scale = (100/(domain[1]-domain[0]))*9.8
+#    rangevar = scale/(domain[1]-domain[0])
+    return (value-minvar)*rangevar
+
+
+
 # Now that we have an example data set (x,y) to work with, we can
 # start graphing it and saving the images.
 def measureFitness(*args, **kwargs):
     yield aspects.proceed
+    global stepframe
 
     if ( (eval % stepframe)==1):
 	population = ea.population()
-	x = (population[:,0]+5)*9.8
-	y = (population[:,1]+5)*9.8
+	x = scale_var(population[:,0])
+	y = scale_var(population[:,1])
 #        print x
 #        print y
 #	print "\n"
@@ -144,10 +183,18 @@ def measureFitness(*args, **kwargs):
 	save()
         
 def plot_function(minimum, maximum, dif):
-    def fitness_two(x,y):
-	sol = np.array([x,y])
-	return function_fitness(sol)
+    def fitness_two(xs,ys):
+	[maxi,maxj] = xs.shape
+	result = zeros(xs.shape,dtype=float)
+	for i in range(maxi):
+	    for j in range(maxj):
+		x = xs[i,j]
+		y = ys[i,j]
+		sol = np.array([x,y])
+		fit=function_fitness(sol)
+		result[i,j] = fit
 
+	return result
     dx = dy = dif
     x = np.arange(minimum, maximum, dx)
     y = np.arange(minimum, maximum, dy)
@@ -161,8 +208,8 @@ def plot_function(minimum, maximum, dif):
     global eval
     eval=0
     population = ea.population()
-    x = (population[:,0]+5)*9.8
-    y = (population[:,1]+5)*9.8
+    x = scale_var(population[:,0])
+    y = scale_var(population[:,1])
 #    print x
 #    print y
 #    print "\n"
@@ -171,13 +218,15 @@ def plot_function(minimum, maximum, dif):
     im = imshow(Z, cmap=cm.jet)
     im.set_interpolation('bilinear')
     save()
+    global numberOfTimeSteps,stepframe
     aspects.with_wrap(measureFitness, SSGA.updateWorst)
-    ea.run(numberOfTimeSteps)
+    ea.run(numberOfTimeSteps*stepframe)
     aspects.without_wrap(measureFitness, SSGA.updateWorst)
     # Clear the figure to make way for the next image.
     plt.clf()
 
-plot_function(-5, 5, 0.1)
+scale = 100/(domain[1]-domain[0])
+plot_function(domain[0], domain[1], scale)
 # Now that we have graphed images of the dataset, we will stitch them
 # together using Mencoder to create a movie.  Each image will become
 # a single frame in the movie.
@@ -199,14 +248,14 @@ command = ('mencoder',
            '-oac',
            'copy',
            '-o',
-           'output.avi')
+           '%s.avi' %fname)
 
 #os.spawnvp(os.P_WAIT, 'mencoder', command)
 
 print "\n\nabout to execute:\n%s\n\n" % ' '.join(command)
 subprocess.check_call(command)
 
-print "\n\n The movie was written to 'output.avi'"
+print "\n\n The movie was written to '%s.avi'" %fname
 
 print "\n\n You may want to delete *.png now.\n\n"
 

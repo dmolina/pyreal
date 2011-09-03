@@ -123,7 +123,7 @@ static int cec2005FunSize = 25;
 /**
  * Permite obtener la información sobre la función
  */
-void getInfo_cec2005(int fun, string &name, double *min, double *max, double &optime) {
+void getInfo_cec2005(int fun, char *name, double *min, double *max, double *optime) {
    int id;
 
    // Compruebo el rango
@@ -131,10 +131,10 @@ void getInfo_cec2005(int fun, string &name, double *min, double *max, double &op
 
    id = fun-1;
 
-   name = cec2005Fun[id].name;
+   strcpy(name, cec2005Fun[id].name.c_str());
    *min = cec2005Fun[id].range[0];
    *max = cec2005Fun[id].range[1];
-   optime = cec2005Fun[id].optime;
+   *optime = cec2005Fun[id].optime;
 }
 
 /**
@@ -159,7 +159,7 @@ double eval_cec2005(const double *x, int ndim) {
     double fit = calc_benchmark_func(y)-optime;
 
     if (fit < 0) {
-	fprintf(stderr, "Value: %e\tOptime: %e\n", fit, optime);
+	fprintf(stderr, "Value: %le\tOptime: %le\n", fit, optime);
     }
 
     assert(fit >= 0);
