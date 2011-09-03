@@ -37,14 +37,17 @@ def main():
     cec2005.config(fun, dim)
     domain = cec2005.domain(fun)
 #    domain = [-5, 5]
-    print "Domain: "
-    print domain, "\n"
+    print "Domain: ", domain
 #    dim=10
     ea = SSGA(domain=domain, size=60, dim=dim, fitness=cec2005.evaluate)
-    ea.run(maxeval=dim*10000)
-    [bestsol, bestfit] = ea.getBest()
-    print bestsol, bestfit
-    print "Best: %e\n" %bestfit
+
+    for x in xrange(25):
+        ea.run(maxeval=dim*10000)
+        [bestsol, bestfit] = ea.getBest()
+        print "BestSol: ", bestsol
+        print "BestFitness: %e" %bestfit
+	ea.reset()
+
 def test():
     import doctest
     doctest.testmod()

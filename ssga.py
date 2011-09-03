@@ -119,6 +119,9 @@ class SSGA:
 	[low,high]=self.domain
 	return np.clip(children, low, high)
 
+    def reset(self):
+	self.values=np.array([])
+
     def run(self,maxeval):
 	self.maxeval=maxeval
 
