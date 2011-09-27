@@ -1,5 +1,6 @@
 import cma
 import logging
+import math
 from readargs import ArgsCEC05
 import libpycec2005 as cec2005
 import numpy as np
@@ -25,13 +26,25 @@ def ipopcmaes(fitness_eval,domain,dim,maxevals):
     # restart with increasing population size (IPOP)
     bestever = cma.BestSolution()
     (min,max)=domain
+    restevals = maxevals
+    popsize = 4+int(3*math.log(dim))
+    initial = np.random.rand(dim)*(max-min)+min
 
-    for lam in 10 * 2**np.arange(7):  # 10, 20, 40, 80, ..., 10 * 2**6
-	es = cma.CMAEvolutionStrategy(np.random.rand(dim)*(max-min)+min,
-	(max-min)/3.0,         # initial std sigma0
+    print "===================================="
+    print "Popsize: %d" %popsize
+
+    while restevals > 0:
+#    for lam in 10 * 2**np.arange(7):  # 10, 20, 40, 80, ..., 10 * 2**6
+	initial = np.random.rand(dim)*(max-min)+min
+	es = cma.CMAEvolutionStrategy(initial,
+	(max-min)/2.0,         # initial std sigma0
 	# bounds 
-	{'maxfevals': maxevals, 'tolfun': '1e-8', 
-	    'popsize': lam, 'verb_append': bestever.evalsall, 'bounds': [min,max]})   # pass options
+	{
+	    'maxfevals': restevals, 
+	    'CMA_active': 1,
+#	     'verb_disp': 500,
+#	     'tolfun': 1e-12,
+	    'popsize': popsize, 'verb_append': bestever.evalsall, 'bounds': [min,max]})   # pass options
 	#logger = logging.getLogger('ipopcmaes')
 
 	while not es.stop():
@@ -49,9 +62,25 @@ def ipopcmaes(fitness_eval,domain,dim,maxevals):
 
 	    if bestever.f < 1e-8:  # global optimum was hit
 		break
-	
+
 	cma.pprint(es.result())
-	return (es.result()[0],es.result()[1])
+	#cma.pprint(bestever.x)
+	#cma.pprint(bestever.f)
+	#print "NumEvals: %d" %es.result()[3]
+
+	if bestever.f < 1e-8:  # global optimum was hit
+	    break
+	else:
+	    evals = es.result()[3]
+	    restevals = restevals - evals
+	    print "It rests %d evaluations" %restevals
+	    popsize = 2*popsize
+	    print "Popsize: %d" %popsize
+	    print "-------------------------------"
+
+    print "===================================="
+    return (bestever.x,bestever.f)
+
 def main():
     """
     Main program
