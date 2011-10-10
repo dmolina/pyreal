@@ -1,0 +1,36 @@
+Feature: Solis Wets Local Search
+
+    Scenario: maxeval=0 does not improve fitness
+	Given I have an SW algorithm
+	When I have a random solution with dimension 10
+	When I improve with maxevals 0 and step size 0.2
+	Then the final fitness should be equals than previous one
+	and numevals is 0
+
+    Scenario: The numevals is always right
+	Given I have an SW algorithm
+	When I have a random solution with dimension 10
+	When I improve with maxevals <maxevals> and step size 0.2
+	Then numevals is <numevals>
+
+    Examples:
+	| maxevals | numevals |
+	|     1    |    1     |
+	|     2    |    2     |
+	|     5    |    5     |
+	|    13    |   13     |
+	|    15    |   15     |
+	|    66    |   66     |
+	|   300    |  300     |
+
+    Scenario: The numevals is always right
+	Given I have an SW algorithm
+	When I have a random solution with dimension 10
+	When I improve with maxevals <maxevals> and step size 0.2
+	Then the final fitness should be better than previous one
+
+    Examples:
+	| maxevals | 
+	|    50    | 
+	|   100    | 
+

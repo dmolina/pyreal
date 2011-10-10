@@ -89,7 +89,7 @@ def apply_cross(self,alpha):
 @step('I set the same parent as mother')
 def cross_same(self):
     population = world.ssga.population()
-    motherId = random.randint(0, world.ssga.popsize)
+    motherid = random.randint(0, world.ssga.popsize)
     world.mother = population[motherId]
     world.parent = world.mother
 
