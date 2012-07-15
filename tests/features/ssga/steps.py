@@ -20,19 +20,27 @@ dim = 10
 def have_configuration(step):
     world.ssga = SSGA(fitness,domain,dim,size=popsize)
 
-@step('I init the population with (\d+)')
+@step('I have a SSGA algorithm for dimension (\d+)')
+def have_configuration(step,dim):
+    dim = int(dim)
+    world.ssga = SSGA(fitness,domain,dim,size=popsize)
+
+
+@step('I init the population with (\d+) individuals')
 def init_population(step,popsize):
     world.popsize = int(popsize)
     world.ssga.initPopulation(int(popsize))
 
-
-@step('popsize is right')
-def popsize_right(step):
+@step('population size is (\d+)')
+def popsize_right(step,popsize_expected):
+    popsize_expected = int(popsize_expected)
     (values_size,values_dim)=world.ssga.population().shape
-    assert values_size == popsize, "Got %d" %values_size
+    assert values_size == popsize_expected, "Got %d instead of %d" %(values_size,popsize_expected)
+#    assert values_size == world.popsize, "Got %d" %values_size
 
-@step('dimension for each individual is right')
-def popsize_right(step):
+@step('dimension for each individual is (\d+)')
+def popsize_right(step,dim):
+    dim = int(dim)
     population = world.ssga.population()
     (values_size,values_dim)=population.shape
     itera = 0
@@ -44,12 +52,12 @@ def popsize_right(step):
 @step('fitness is initialized')
 def fitness_right(step):
     fits = world.ssga.population_fitness()
-    assert fits.size == popsize, "Fitness size is zero"
+    assert fits.size == world.popsize, "Fitness size is zero"
 
 @step('all fitness values are different')
 def fitness_not_same(step):
     fits = world.ssga.population_fitness()
-    assert np.unique(fits).size == popsize, "Fitness values are equals"
+    assert np.unique(fits).size == world.popsize, "Fitness values are equals"
 
 @step('I select parents with tournament size (\d+)')
 def set_parents(step,tsize):
@@ -69,7 +77,7 @@ def best_parent(step):
     population = world.ssga.population()
 
 
-@step('the parent or the mother is the furthest')
+@step('the distance between parents is the longest')
 def best_parent(step):
     ssga = world.ssga
     [motherId,parentId]=ssga.getParents(world.nam_tsize)
@@ -89,7 +97,7 @@ def apply_cross(self,alpha):
 @step('I set the same parent as mother')
 def cross_same(self):
     population = world.ssga.population()
-    motherid = random.randint(0, world.ssga.popsize)
+    motherId = random.randint(0, world.ssga.popsize)
     world.mother = population[motherId]
     world.parent = world.mother
 

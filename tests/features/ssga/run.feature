@@ -1,4 +1,7 @@
 Feature: SSGA run
+    Check two fundamental features of the algorithm. First, 
+    than the evaluations number is the right, and that
+    it its elitism. 
 
     Scenario: SSGA runs implies a good 
 	Given I have a SSGA algorithm

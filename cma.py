@@ -1,15 +1,17 @@
 #!/usr/bin/env python
 """Module cma implements the CMA-ES, Covariance Matrix Adaptation Evolution 
-Strategy, a stochastic optimizer for robust non-linear non-convex function 
-minimization. 
+Strategy, a stochastic optimizer for robust non-linear non-convex 
+derivative-free function minimization for Python versions 2.6 and 2.7 
+(in Python 2.5 the collections import does not provide the class MutableMapping). 
 
 CMA-ES searches for a minimizer (a solution x in R**n) of an
 objective function f (cost function), such that f(x) is
 minimal. Regarding f, only function values for candidate solutions
 need to be available, gradients are not necessary. Even less
 restrictive, only a passably reliable ranking of the candidate
-solutions in each iteration is necessary. Some termination 
-criteria however depend on actual f-values. 
+solutions in each iteration is necessary, the function values 
+itself do not matter. Some termination criteria however depend 
+on actual f-values. 
 
 Two interfaces are provided:
 
@@ -64,7 +66,7 @@ Example
     
 :See: `fmin()`, `Options`, `CMAEvolutionStrategy` 
 
-:Author: Nikolaus Hansen, 2008-2011
+:Author: Nikolaus Hansen, 2008-2012
 
 :License: GPL 2 and 3
 
@@ -72,10 +74,11 @@ Example
 
 from __future__ import division  # future is >= 3.0, this code has been used with 2.5 & 2.6 & 2.7
 from __future__ import with_statement  # only necessary for python 2.5 and not in heavy use
+# from __future__ import collections.MutableMapping # does not exist in future
 # from __future__ import print_function  # for cross-checking, available from python 2.6
 
-__version__ = "0.9.95 $Revision: 3022 $" 
-#    $Date: 2011-09-15 16:25:35 +0200 (Thu, 15 Sep 2011) $
+__version__ = "0.91.00 $Revision: 3103 $" 
+#    $Date: 2012-01-31 15:14:46 +0100 (Tue, 31 Jan 2012) $
 #    bash: svn propset svn:keywords 'Date Revision' cma.py
 
 #
@@ -105,8 +108,18 @@ __version__ = "0.9.95 $Revision: 3022 $"
 #       some things like class attributes are not interpreted correctly
 #    sphinx: doc style of doc.python.org, could not make it work
 
+# TODO: add a default logger in CMAEvolutionStrategy, see fmin() and optimize() first
+#        tell() should probably not add data. Should optimize() handle even an after_iteration_handler?
+# TODO: CMAEvolutionStrategy(ones(10), 1).optimize(cma.fcts.elli)  # should work like fmin
+#       one problem: the data logger is not default and seemingly cannot be attached in one line
+# TODO: check combination of boundary handling and transformation: penalty must be computed
+#       on gp.pheno(x_geno, bounds=None), but without bounds, check/remove usage of .geno everywhere
+# TODO: check whether all new solutions are put into self.sent_solutions 
+# TODO: separate initialize==reset_state from __init__
+# TODO: introduce Zpos == diffC which makes the code more consistent and the active update "exact"
 # TODO: split tell into a variable transformation part and the "pure" functionality
-#       usecase: es.tell(X, [func(es.pheno(x)) for x in X])
+#       usecase: es.tell_geno(X, [func(es.pheno(x)) for x in X])
+#       genotypic repair is not part of tell_geno 
 # TODO: read settable "options" from a (properties) file, see myproperties.py
 # 
 # typical parameters in scipy.optimize: disp, xtol, ftol, maxiter, maxfun, callback=None
@@ -133,7 +146,7 @@ __version__ = "0.9.95 $Revision: 3022 $"
 #
 # TODO (later): implement readSignals from a file like properties file (to be called after tell())
 
-import sys, time   # not really essential
+import sys, time, collections  # not really essential
 import numpy as np # arange, cos, size, eye, inf, dot, floor, outer, zeros, linalg.eigh, sort, argsort, random, ones,... 
 from numpy import array, dot, log, sqrt, sum, exp, inf  # to access the built-in sum fct:  __builtins__.sum or del sum removes the imported sum and recovers the shadowed 
 try:
@@ -144,13 +157,20 @@ except:
     
 __docformat__ = "reStructuredText"  # this hides some comments entirely?
 
-# sys.py3kwarning = True  # TODO: out-comment from version 2.6
+sys.py3kwarning = True  # TODO: out-comment from version 2.6
 
 # why not package math? 
 
 # TODO: check scitools.easyviz and how big the adaptation would be
 
 # changes:
+# 12/01/30: class Solution and more old stuff removed r3101
+# 12/01/29: class Solution is depreciated, GenoPheno and SolutionDict do the job (v0.91.00, r3100)
+# 12/01/06: CMA_eigenmethod option now takes a function (integer still works)
+# 11/09/30: flat fitness termination checks also history length
+# 11/09/30: elitist option (using method clip_or_fit_solutions)
+# 11/09/xx: method clip_or_fit_solutions for check_points option for all sorts of
+#           injected or modified solutions and even reliable adaptive encoding
 # 11/08/19: fixed: scaling and typical_x type clashes 1 vs array(1) vs ones(dim) vs dim * [1]
 # 11/07/25: fixed: fmin wrote first and last line even with verb_log==0
 #           fixed: method settableOptionsList, also renamed to versatileOptions
@@ -188,6 +208,8 @@ __docformat__ = "reStructuredText"  # this hides some comments entirely?
 # "x in emptysets" cannot be well replaced by "not x" 
 # which is also True for array([]) and None, but also for 0 and False, and False for NaN
 
+use_sent_solutions = True  # 5-30% CPU slower, particularly for large lambda, will be mandatory soon
+
 #____________________________________________________________
 #____________________________________________________________
 #
@@ -219,7 +241,7 @@ def unitdoctest():
     Test on the Rosenbrock function with 3 restarts. The first trial only
     finds the local optimum, which happens in about 20% of the cases.
         >>> import cma
-        >>> res = cma.fmin(cma.fcts.rosen, 4*[1],1, ftarget=1e-6, restarts=3, verb_time=0, verb_disp=500, seed=3)
+        >>> res = cma.fmin(cma.fcts.rosen, 4*[-1],1, ftarget=1e-6, restarts=3, verb_time=0, verb_disp=500, seed=3)
         (4_w,8)-CMA-ES (mu_w=2.6,w_1=52%) in dimension 4 (seed=3)
         Iterat #Fevals   function value     axis ratio  sigma   minstd maxstd min:sec
             1       8 4.875315645656848e+01 1.0e+00 8.43e-01  8e-01  8e-01 
@@ -279,6 +301,124 @@ class BlancClass(object):
 #_____________________________________________________________________
 #_____________________________________________________________________
 #
+class DerivedDictBase(collections.MutableMapping):
+    """for conveniently adding features to a dictionary. The actual
+    dictionary is in ``self.data``. Copy-paste
+    and modify setitem, getitem, and delitem, if necessary"""
+    def __init__(self, *args, **kwargs):
+        collections.MutableMapping.__init__(self)
+        # super(SolutionDict, self).__init__()  # the same
+        self.data = dict(*args, **kwargs)
+    def __len__(self):
+        return len(self.data)
+    def __contains__(self, value):
+        return value in self.data
+    def __iter__(self):
+        return iter(self.data) 
+    def __setitem__(self, key, value):
+        """defines self[key] = value"""
+        self.data[key] = value
+    def __getitem__(self, key):
+        """defines self[key]"""
+        return self.data[key]
+    def __delitem__(self, key):
+        del self.data[key]
+        
+class SolutionDict(DerivedDictBase):
+    """dictionary with computation of an hash key for the inserted solutions and 
+    stack of previously inserted same solutions. 
+    Each entry is meant to store additional information related to the solution. 
+    
+        d = SolutionDict()
+        x = array([1,2,4])
+        d[x] = {'x': x, 'iteration': 1}
+        d.get(x) == d[x] if d.key(x) in d.keys() else d.get(x) is None
+    
+    TODO: not yet tested
+    TODO: data_with_same_key behaves like a stack (see setitem and delitem), but rather should behave like a queue?!
+    A queue is less consistent with the operation self[key] = ..., if self.data_with_same_key[key] is not empty. 
+     
+    """
+    def __init__(self, *args, **kwargs):
+        DerivedDictBase.__init__(self, *args, **kwargs)
+        self.data_with_same_key = {}
+    def key(self, x):
+        try:
+            return tuple(x)
+        except TypeError:
+            return x
+    def __setitem__(self, key, value):
+        """defines self[key] = value"""
+        key = self.key(key)
+        if key in self.data_with_same_key:
+            self.data_with_same_key[key] += [self.data[key]]
+        elif key in self.data:
+            self.data_with_same_key[key] = [self.data[key]]
+        self.data[key] = value
+    def __getitem__(self, key):
+        """defines self[key]"""
+        return self.data[self.key(key)]
+    def __delitem__(self, key):
+        """remove only most current key-entry"""
+        key = self.key(key)
+        if key in self.data_with_same_key:
+            if len(self.data_with_same_key[key]) == 1:
+                self.data[key] = self.data_with_same_key.pop(key)[0]
+            else:
+                self.data[key] = self.data_with_same_key[key].pop(-1)
+        else:
+            del self.data[key]
+    def truncate(self, max_len, min_iter):
+        if len(self) > max_len:
+            for k in self.keys():
+                if self[k]['iteration'] < min_iter:
+                    del self[k]  # only deletes one item with k as key, should delete all?
+
+class SolutionDictOld(dict):
+    """depreciated, SolutionDict should do, to be removed after SolutionDict
+    has been successfully applied.
+    dictionary with computation of an hash key for the inserted solutions and 
+    stack of previously inserted same solutions. 
+    Each entry is meant to store additional information related to the solution. 
+    Methods ``pop`` and ``get`` are modified accordingly.
+    
+        d = SolutionDict()
+        x = array([1,2,4])
+        d.insert(x, {'x': x, 'iteration': 1})
+        d.get(x) == d[d.key(x)] if d.key(x) in d.keys() else d.get(x) is None
+    
+    TODO: not yet tested
+    TODO: behaves like a stack (see _pop_derived), but rather should behave like a queue?!
+    A queue is less consistent with the operation self[key] = ..., if self.more[key] is not empty. 
+     
+    """
+    def __init__(self):
+        self.more = {}  # previously inserted same solutions
+        self._pop_base = self.pop
+        self.pop = self._pop_derived
+        self._get_base = self.get
+        self.get = self._get_derived
+    def key(self, x):
+        """compute the hash key of ``x``"""
+        return tuple(x)
+    def insert(self, x, datadict):
+        key = self.key(x)
+        if key in self.more:
+            self.more[key] += [self[key]]
+        elif key in self:
+            self.more[key] = [self[key]]
+        self[key] = datadict
+    def _get_derived(self, x, default=None):
+        return self._get_base(self.key(x), default)
+    def _pop_derived(self, x):
+        key = self.key(x)
+        res = self[key]
+        if key in self.more:
+            if len(self.more[key]) == 1:
+                self[key] = self.more.pop(key)[0]
+            else:
+                self[key] = self.more[key].pop(-1)
+        return res
 class BestSolution(object):
     """container to keep track of the best solution seen"""
     def __init__(self, x=None, f=np.inf, evals=None):
@@ -287,212 +427,46 @@ class BestSolution(object):
         
         """
         self.x = x
-        self.f = f if f is not None else np.inf
+        self.x_geno = None
+        self.f = f if f is not None and f is not np.nan else np.inf
         self.evals = evals
         self.evalsall = evals
-    def update(self, arx, arf=None, evals=None):
+        self.last = BlancClass()
+        self.last.x = x
+        self.last.f = f
+    def update(self, arx, xarchive=None, arf=None, evals=None):
         """checks for better solutions in list `arx`, based on the smallest 
         corresponding value in `arf`, alternatively, `update` may be called 
         with a `BestSolution` instance like ``update(another_best_solution)``
-        in which case the better solution becomes the current best 
+        in which case the better solution becomes the current best. 
+        
+        `xarchive` is used to retrieve the genotype of a solution. 
         
         """
         if arf is not None:  # find failsave minimum
             minidx = np.nanargmin(arf)
+            if minidx is np.nan:
+                return
             minarf = arf[minidx]
             # minarf = reduce(lambda x, y: y if y and y is not np.nan and y < x else x, arf, np.inf)
         if type(arx) == BestSolution:
             self.evalsall = max((self.evalsall, arx.evalsall))
             if arx.f is not None and arx.f < np.inf:
-                self.update([arx.x], [arx.f], arx.evals)
+                self.update([arx.x], xarchive, [arx.f], arx.evals)
+            return self
         elif minarf < np.inf and (minarf < self.f or self.f is None):
             self.x, self.f = arx[minidx], arf[minidx]
+            self.x_geno = xarchive[self.x]['geno'] if xarchive is not None else None
             self.evals = None if not evals else evals - len(arf) + minidx+1
             self.evalsall = evals
         elif evals:
             self.evalsall = evals
+        self.last.x = arx[minidx]
+        self.last.f = minarf
     def get(self):
         """return ``(x, f, evals)`` """
-        return self.x, self.f, self.evals
-    
-    
-#____________________________________________________________
-#____________________________________________________________
-#
-class Solution(np.ndarray):
-    """this class is a stump, but functional and in use: Solution represents 
-    a candidate solution (a vector of real numbers), for example returned by 
-    `cma.CMAEvolutionStrategy.ask()`. 
-    The class inherits from `numpy.ndarray` and can therefore be used as 
-    a `numpy` array. Additionally, the solution can be repaired based on domain 
-    boundaries. The input arguments to further available methods are subject to 
-    future changes.  
-    
-    Attributes
-    ----------
-        - unrepaired 
-            array, solution before the last call to repair() 
-            in case of bounds, or current solution in case bounds are None, 
-            or None in case repair was never called
-        - isgeno 
-            whether the solution represents a genotyp (internal
-            representation in CMAEvolutionStrategy)
-        - geno 
-            array, solution during construction, genotype 
-            representation, or None
-
-    TODO: add attributes for the f-value f and the nb of f-evaluations 
-    evals? 
-    
-    Example
-    -------
-     
-        >>> import cma
-        >>> x = cma.Solution([0, -2, 3])
-        >>> x                         # is a float np.array
-        Solution([ 0., -2.,  3.])
-        >>> x.repair([0.5, None])     # set lower domain bound to 0.5
-        Solution([ 0.5,  0.5,  3. ])
-        >>> x                         # check that x was changed
-        Solution([ 0.5,  0.5,  3. ])
-        >>> x.unrepaired              # original values
-        array([ 0., -2.,  3.])
-        >>> x.isgeno                  # by default not the internal repr.
-        False
+        return self.x, self.f, self.evals, self.x_geno
         
-    """
-    def __init__(self, x, copy=False, geno=False, gp=None):
-        """return `Solution` instance with value `x`. 
-        
-        Arguments
-        ---------
-            `x`
-                data vector
-            `copy` 
-                make a copy of `x`?
-            `geno` 
-                result represents a genotype?
-            `gp` 
-                if not `None` and ``geno==False`` a `cma.GenoPheno` object 
-                used to transform `x` to the phenotype
-                
-        """ 
-        # f=np.NaN, evals=np.NaN, ldom=None, udom=None):
-        # by now __new__(self, x, copy=False, geno=False) has been
-        # called implicitly, so there is nothing to do. 
-        self.isgeno = geno  # overwrite values from x
-        self.geno = None
-        if geno is False and gp is not None:  
-            self.geno = x  # array(x, copy)
-        self.unrepaired = None # array(self, copy=False)
-        return
-        
-    def __new__(cls, data, copy=False, geno=False, gp=None):
-        """return a new object instance of type `cls` == `cma.Solution` """ 
-        # static classmethod, implicitly called before __init__
-        # cls is like the self argument for an instance!?
-        # necessary, because numpy.ndarray behaves in part like a
-        # built-in class (what a hack)
-        
-        # initialize self from argument data
-        if type(data) == cls and copy is False and gp is None:
-            return data
-        
-        if geno is False and gp is not None:
-            self = np.array(gp.pheno(data, copy=True), dtype=np.float_, copy=False).view(type=cls)
-            # self = np.asarray(gp.pheno(data, bounds)).view(cls)
-            # self = np.ndarray.__new__(Solution, np.asarray(data).shape)
-            # self[:] = gp.pheno(data, bounds)
-        else:
-            self = np.array(data, dtype=np.float_, copy=copy).view(type=cls)
-            # self = np.asarray(data).view(cls)
-            # self = np.ndarray.__new__(Solution, np.asarray(data).shape)
-            # self[:] = np.asarray(data)
-        
-        # initialize attributes (moved to init)
-        if 11 < 3:  # disregard class of data and type(data) is not Solution: 
-            self.isgeno = geno  
-            self.unrepaired = None
-            
-        return self  # calls _array_finalize__, if available
-        
-    #~ def __array_finalize__(self, obj):  # only called if type(obj) is Solution?
-        #~ # Purpose: assign additional attributes from initializing obj (copy constructor)
-        #~ # This is removed, because it is not very efficient.
-        #~ # the effect: any new solution is not isgeno and has no unrepaired version
-        #~ if type(obj) is Solution:  # copy attributes
-            #~ self.unrepaired = getattr(obj, 'unrepaired', None)
-            #~ self.isgeno = getattr(obj, 'isgeno', None)
-    
-    def get_geno(self, gp):
-        """return solution in "internal" representation.
-        Argument `gp`: `GenoPheno` class instance (subject to future changes)
-        """
-
-        if self.isgeno:
-            return self
-        # gp.geno copies data
-        return Solution(gp.geno(self), copy=False, geno=True) 
-        
-    def get_pheno(self, gp):
-        """return solution in original representation. 
-        
-        TODO: consider name change
-        
-        Argument `gp` -- `GenoPheno` class instance (subject to future changes)
-        
-        """
-        if not self.isgeno:
-            return self
-
-        # keep genotype, might become out-of-date
-        self.geno = array(self)  
-
-        # gp.pheno copies data
-        return Solution(gp.pheno(self), copy=False, geno=False)
-    
-    def repair(self, bounds, keep_unrepaired=True):
-        """sets out-of-bounds components of the represented solution 
-        on the bounds.  
-        
-        Arguments
-        ---------
-            `bounds` 
-                can be `None` or ``[lb, ub]``, where `lb` and `ub`
-                represent lower and upper domain bounds respectively that 
-                can be `None` or a scalar or a list or array of length ``len(self)``
-            `keep_unrepaired`    
-                make a copy of the original values in case of bounds
-        """
-        # TODO: CPU(N,lam,iter=20,200,100): 3.3s of 8s for two bounds, 1.8s of 6.5s for one bound
-        if self.isgeno:
-            raise _Error('genotyp cannot be repaired')
-            
-        if bounds not in (None, [None, None]):  # solely for effiency 
-            # this produces a memory leak (supposably a numpy bug, reported by Daan Sprunken)
-            # self.unrepaired = self.view(np.ndarray)  
-                    
-            self.unrepaired = None
-            if keep_unrepaired: 
-                # self.unrepaired = self[:]  # make a copy
-                self.unrepaired = array(self)  # make a copy, resolves the memory leak
-            if bounds[0] is not None:
-                if np.isscalar(bounds[0]):
-                    for i in xrange(len(self)):
-                        self[i] = max(bounds[0], self[i])
-                else:
-                    for i in xrange(len(self)):
-                        self[i] = max(bounds[0][i], self[i])
-            if bounds[1] is not None:
-                if np.isscalar(bounds[1]):
-                    for i in xrange(len(self)):
-                        self[i] = min(bounds[1], self[i])
-                else:
-                    for i in xrange(len(self)):
-                        self[i] = min(bounds[1][i], self[i])
-            # gp.into_bounds(self, copy_never=True)  # don't copy, because of side effect
-        return self  # convenience return
-
 #____________________________________________________________
 #____________________________________________________________
 #
@@ -512,32 +486,82 @@ class BoundPenalty(object):
     removed in future.  
     
     """
-    def __init__(self, bounds): 
-        """Argument bounds can be `None` or `bounds[0]` and `bounds[1]` 
+    def __init__(self, bounds=None): 
+        """Argument bounds can be `None` or ``bounds[0]`` and ``bounds[1]`` 
         are lower  and upper domain boundaries, each is either `None` or 
         a scalar or a list or array of appropriate size.
         """
         ##
         # bounds attribute reminds the domain boundary values
-        self.bounds = None  
+        self.bounds = bounds  
         
-        if bounds is not None:  # make the update stand-alone
-            self.bounds = bounds
         self.gamma = 1  # a very crude assumption
         self.weights_initialized = False  # gamma becomes a vector after initialization
         self.hist = []  # delta-f history
         
+    def has_bounds(self):
+        """return True, if any variable is bounded"""
+        bounds = self.bounds
+        if bounds in (None, [None, None]):
+            return False
+        for i in xrange(bounds[0]):
+            if bounds[0][i] is not None and bound[0][i] > -np.inf:
+                return True
+        for i in xrange(bounds[1]):
+            if bounds[1][i] is not None and bound[1][i] < np.inf:
+                return True
+        return False
+    
+    def repair(self, x, bounds=None, copy=False, copy_always=False):
+        """sets out-of-bounds components of ``x`` on the bounds.  
+        
+        Arguments
+        ---------
+            `bounds` 
+                can be `None`, in which case the "default" bounds are used,
+                or ``[lb, ub]``, where `lb` and `ub`
+                represent lower and upper domain bounds respectively that 
+                can be `None` or a scalar or a list or array of length ``len(self)``
+
+        code is more or less copy-paste from Solution.repair, but never tested
+        
+        """
+        # TODO (old data): CPU(N,lam,iter=20,200,100): 3.3s of 8s for two bounds, 1.8s of 6.5s for one bound
+        # TODO: test whether np.max([bounds[0], x], axis=0) etc is speed relevant
+
+        if bounds is None:
+            bounds = self.bounds
+        if copy_always:
+            x_out = array(x, copy=True)
+        if bounds not in (None, [None, None], (None, None)):  # solely for effiency 
+            x_out = array(x, copy=True) if copy and not copy_always else x
+            if bounds[0] is not None:
+                if np.isscalar(bounds[0]):
+                    for i in xrange(len(x)):
+                        x_out[i] = max([bounds[0], x[i]])
+                else:
+                    for i in xrange(len(x)):
+                        if bounds[0][i] is not None: 
+                            x_out[i] = max([bounds[0][i], x[i]]) 
+            if bounds[1] is not None:
+                if np.isscalar(bounds[1]):
+                    for i in xrange(len(x)):
+                        x_out[i] = min([bounds[1], x[i]])
+                else:
+                    for i in xrange(len(x)):
+                        if bounds[1][i] is not None: 
+                            x_out[i] = min([bounds[1][i], x[i]])
+        return x_out  # convenience return
+    
     #____________________________________________________________
     #
-    def __call__(self, x, bounds=None):
+    def __call__(self, x, archive, gp):
         """returns the boundary violation penalty for `x` ,where `x` is a 
         single solution or a list or array of solutions. 
         If `bounds` is not `None`, the values in `bounds` are used, see `__init__`"""
         if x in (None, (), []):
             return x
-        if bounds is None:
-            bounds = self.bounds
-        if bounds is None or bounds == [None, None]:
+        if gp.bounds in (None, [None, None], (None, None)):
             return 0.0 if np.isscalar(x[0]) else [0.0] * len(x) # no penalty
         
         x_is_single_vector = np.isscalar(x[0])
@@ -545,13 +569,13 @@ class BoundPenalty(object):
         
         pen = []
         for xi in x:   
-            if type(xi) is not Solution or xi.unrepaired is None:
-                # CAVE: this does not work with already repaired values!!
-                # CPU(N,lam,iter=20,200,100)?: 3s of 10s, array(xi): 1s (check again)
-                # remark: one deep copy can be prevented by xold = xi first
-                xi = Solution(xi, copy=True).repair(bounds, keep_unrepaired=True) 
+            # CAVE: this does not work with already repaired values!!
+            # CPU(N,lam,iter=20,200,100)?: 3s of 10s, array(xi): 1s (check again)
+            # remark: one deep copy can be prevented by xold = xi first
+            xpheno = gp.pheno(archive[xi]['geno'])
+            xinbounds = gp.into_bounds(xpheno)
             fac = 1  # exp(0.1 * (log(self.scal) - np.mean(self.scal)))
-            pen.append(sum(self.gamma * ((xi - xi.unrepaired) / fac)**2) / len(xi)) 
+            pen.append(sum(self.gamma * ((xinbounds - xpheno) / fac)**2) / len(xi)) 
             
         return pen[0] if x_is_single_vector else pen
         
@@ -654,7 +678,7 @@ class BoundPenalty(object):
                 solutions = es.pop  # this has not been checked
                 r = self.feasible_ratio(solutions)  # has to be the averaged over N iterations
                 self.gamma *= exp(np.max([N*[0], 0.3 - r], axis=0))**min(1, es.sp.mueff/10/N)
-
+        es.more_to_write = self.gamma if self.weights_initialized else np.ones(N)
         ### return penalty
         # es.more_to_write = self.gamma if not np.isscalar(self.gamma) else N*[1]
         return self  # bound penalty values
@@ -663,8 +687,10 @@ class BoundPenalty(object):
 #____________________________________________________________
 #   
 class GenoPhenoBase(object):
-    """abstract base class for genotyp-phenotype transformation, 
+    """depreciated, abstract base class for genotyp-phenotype transformation, 
     to be implemented. 
+    
+    See (and rather use) option ``transformation`` of ``fmin`` or ``CMAEvolutionStrategy``. 
     
     Example
     -------
@@ -685,6 +711,7 @@ class GenoPhenoBase(object):
     (with check_points being True). 
     
     TODO: check usecases in `CMAEvolutionStrategy` and implement option GenoPhenoBase 
+    
     """
     def pheno(self, x):
         raise NotImplementedError()
@@ -693,7 +720,7 @@ class GenoPhenoBase(object):
 #____________________________________________________________
 #____________________________________________________________
 #   
-class GenoPheno(GenoPhenoBase):
+class GenoPheno(object):
     """Genotype-phenotype transformation.
     
     Method `pheno` provides the transformation from geno- to phenotype, 
@@ -707,11 +734,13 @@ class GenoPheno(GenoPhenoBase):
        - affine linear transformation (scaling and shift)
        - user-defined transformation
        - projection into feasible domain (boundaries) 
-       - assign fixed variables again their original phenotypic value
+       - assign fixed variables their original phenotypic value
 
     By default all transformations are the identity. The boundary 
     transformation is only applied, if the boundaries are given as argument to
     the method `pheno` or `geno` respectively. 
+    
+    ``geno`` is not really necessary and might disappear in future. 
 
     """
     def __init__(self, dim, scaling=None, typical_x=None, bounds=None, fixed_values=None, tf=None):
@@ -830,7 +859,7 @@ class GenoPheno(GenoPhenoBase):
         else:
             self.isidentity = False
             
-    def into_bounds(self, y, bounds=None, copy_never=False):
+    def into_bounds(self, y, bounds=None, copy_never=False, copy_always=False):
         """Argument `y` is a phenotypic vector,
         return `y` put into boundaries, as a copy iff ``y != into_bounds(y)``. 
             
@@ -840,14 +869,20 @@ class GenoPheno(GenoPhenoBase):
         """
         bounds = bounds if bounds is not None else self.bounds
         if bounds in (None, [None, None]):
-            return y
+            return y if not copy_always else array(y, copy=True)
         if bounds[0] is not None:
+            if len(bounds[0]) not in (1, len(y)):
+                raise ValueError('len(bounds[0]) = ' + str(len(bounds[0])) + 
+                                 ' and len of initial solution (' + str(len(y)) + ') disagree')
             if copy_never:  # is rather slower
                 for i in xrange(len(y)):
                     y[i] = max(bounds[0][i], y[i])
             else:
                 y = np.max([bounds[0], y], axis=0)
         if bounds[1] is not None:
+            if len(bounds[1]) not in (1, len(y)):
+                raise ValueError('len(bounds[1]) = ' + str(len(bounds[1])) + 
+                                    ' and initial solution (' + str(len(y)) + ') disagree')
             if copy_never:
                 for i in xrange(len(y)):
                     y[i] = min(bounds[1][i], y[i])
@@ -855,9 +890,18 @@ class GenoPheno(GenoPhenoBase):
                 y = np.min([bounds[1], y], axis=0)
         return y
         
-    def pheno(self, x, copy=True, bounds=None):
-        """maps the genotypic input argument into the phenotypic space, see
-        help for class `GenoPheno`"""
+    def pheno(self, x, bounds=None, copy=True, copy_always=False):
+        """maps the genotypic input argument into the phenotypic space, 
+        boundaries are only applied if argument ``bounds is not None``, see
+        help for class `GenoPheno`
+        
+        """
+        if copy_always and not copy:
+            raise ValueError('arguments copy_always=' + str(copy_always) + 
+                             ' and copy=' + str(copy) + ' have inconsistent values')
+        if self.isidentity and bounds in (None, [None, None], (None, None)):
+            return x if not copy_always else array(x, copy=copy_always)
+        
         if self.fixed_values is None:
             y = array(x, copy=copy)  # make a copy, in case
         else:  # expand with fixed values
@@ -884,15 +928,25 @@ class GenoPheno(GenoPhenoBase):
                 
         return y
         
-    def geno(self, y, bounds=None, copy=True, copy_always=False):
+    def geno(self, y, bounds=None, copy=True, copy_always=False, archive=None):
         """maps the phenotypic input argument into the genotypic space. 
         If `bounds` are given, first `y` is projected into the feasible
-        domain. In this case ``copy==False`` might still lead to a copy.
-        """
-        # TODO: to avoid computational overhead just do
-        # if type(y) is Solution and y.geno: 
-        #     return y.geno 
+        domain. In this case ``copy==False`` leads to a copy.
         
+        by default a copy is made only to prevent to modify ``y``
+        
+        method geno is only needed if external solutions are injected
+        (geno(initial_solution) is depreciated and will disappear)
+        
+        TODO: arg copy=True should become copy_never=False
+
+        """
+        if archive is not None and bounds is not None:
+            try:
+                return archive[y]['geno']
+            except:
+                pass
+    
         x = array(y, copy=(copy and not self.isidentity) or copy_always)
 
         # bounds = self.bounds if bounds is None else bounds
@@ -959,7 +1013,7 @@ class OOOptimizer(object):
     `CMAEvolutionStrategy.result()` appended with `None` (no logger).
     In order to display more exciting output we rather do ::
     
-        logger = CMADataLogger()  # derives from the abstract OptimDataLogger class
+        logger = CMADataLogger()  # derives from the abstract BaseDataLogger class
         res = CMAEvolutionStrategy(9 * [0.5], 0.3).optimize(elli, logger)
         logger.plot()  # if matplotlib is available, logger == res[-1]
 
@@ -1007,6 +1061,9 @@ class OOOptimizer(object):
     def __init__(self, xstart, **more_args): 
         """abstract method, ``xstart`` is a mandatory argument""" 
         OOOptimizer.abstract()
+    def initialize(self):
+        """(re-)set to the initial state"""
+        OOOptimizer.abstract()
     def ask(self): 
         """abstract method, AKA "get", deliver new candidate solution(s), a list of "vectors"
         """
@@ -1029,7 +1086,7 @@ class OOOptimizer(object):
         
     def optimize(self, objectivefct, logger=None, verb_disp=20, iterations=None):
         """find minimizer of `objectivefct` by iterating over `OOOptimizer` `self`  
-        with verbosity `verb_disp`, using `OptimDataLogger` `logger` with at  
+        with verbosity `verb_disp`, using `BaseDataLogger` `logger` with at  
         most `iterations` iterations. ::
         
             return self.result() + (self.stop(), self, logger)
@@ -1051,13 +1108,15 @@ class OOOptimizer(object):
           438    3942 1.187372505161762e-14 6.0e+01 3.27e-07  4e-09  9e-08 0:1.2 
         ('termination by', {'tolfun': 1e-11})
         ('best f-value =', 1.1189867885201275e-14)
-        ('solution =', Solution([ 1.        ,  1.        ,  1.        ,  0.99999999,  0.99999998,
+        ('solution =', array([ 1.        ,  1.        ,  1.        ,  0.99999999,  0.99999998,
                 0.99999996,  0.99999992]))
         >>> print(res[0])
         [ 1.          1.          1.          0.99999999  0.99999998  0.99999996
           0.99999992]
             
         """
+        if logger is None and hasattr(self, 'logger'):
+            logger = self.logger
         citer = 0
         while not self.stop():
             if iterations is not None and citer >= iterations:
@@ -1085,6 +1144,7 @@ class OOOptimizer(object):
 # 
 class CMAEvolutionStrategy(OOOptimizer):
     """CMA-ES stochastic optimizer class with ask-and-tell interface.
+    
     See `fmin` for the one-line-call functional interface.  
     
     Calling sequence
@@ -1121,7 +1181,7 @@ class CMAEvolutionStrategy(OOOptimizer):
     
         solutions = optim.ask() 
     
-    is used to get new candidate solutions (possibly several times) and ::
+    is used to ask for new candidate solutions (possibly several times) and ::
     
         optim.tell(solutions, func_values) 
     
@@ -1172,7 +1232,9 @@ class CMAEvolutionStrategy(OOOptimizer):
     the method ``get_mirror()``. Only the method `ask_and_eval()` will
     then sample selectively mirrored vectors. In selective mirroring, only
     the worst solutions are mirrored. With the default small number of mirrors, 
-    *pairwise mirroring* is implicite and therefore not explicitly implemented. 
+    *pairwise selection* (where at most one of the two mirrors contribute to the 
+    update of the distribution mean) is implicitely guarantied under selective 
+    mirroring and therefore not explicitly implemented. 
     
     References: Brockhoff et al, PPSN 2010, Auger et al, GECCO 2011. 
     
@@ -1214,6 +1276,16 @@ class CMAEvolutionStrategy(OOOptimizer):
     result(self) method of cma.CMAEvolutionStrategy instance
        return ``(xbest, f(xbest), evaluations_xbest, evaluations, iterations, pheno(xmean), effective_stds)``
      
+    Using the multiprocessing module, we can evaluate the function in parallel with a simple 
+    modification of the example ::
+    
+        import multiprocessing
+        # prepare es = ...
+        pool = multiprocessing.Pool(es.popsize)
+        while not es.stop():
+            X = es.ask()
+            es.tell(X, pool.map_async(cma.fcts.elli, X))
+        
     Example with a data logger, lower bounds (at zero) and handling infeasible solutions:
     
     >>> import cma
@@ -1353,22 +1425,23 @@ class CMAEvolutionStrategy(OOOptimizer):
                 self.mean = self.mean[0]
             elif self.mean.shape[1] == 1:
                 self.mean = array([x[0] for x in self.mean])
-        self.x0 = self.mean.copy()  # for the record and output
         if self.mean.ndim != 1:
             raise _Error('x0 must be 1-D array')
-        if len(self.mean) <= 0:
+        if len(self.mean) <= 1:
             raise _Error('optimization in 1-D is not supported (code was never tested)')
         
         self.N = self.mean.shape[0]
         N = self.N
         self.mean.resize(N) # 1-D array, not really necessary?!
+        self.x0 = self.mean
+        self.mean = self.x0.copy()  # goes to initialize
         
         self.sigma0 = sigma0
         if isinstance(sigma0, str):  # TODO: no real need here (do rather in fmin)
             self.sigma0 = eval(sigma0)  # like '1./N' or 'np.random.rand(1)[0]+1e-2'
         if np.size(self.sigma0) != 1 or np.shape(self.sigma0): 
             raise _Error('input argument sigma0 must be (or evaluate to) a scalar')
-        self.sigma = self.sigma0
+        self.sigma = self.sigma0  # goes to inialize
         
         # extract/expand options 
         opts.evalall(locals())  # using only N
@@ -1407,12 +1480,12 @@ class CMAEvolutionStrategy(OOOptimizer):
         if self.opts['CMA_diagonal']:  # is True or > 0
             # linear time and space complexity 
             self.B = array(1) # works fine with np.dot(self.B, anything) and self.B.T
-            self.C = stds**2
+            self.C = stds**2  # TODO: remove this!?
             self.dC = self.C
         else:
             self.B = np.eye(N) # identity(N), do not from matlib import *, as eye is a matrix there
             # prevent equal eigenvals, a hack for np.linalg:
-            self.C = np.diag(stds**2 * exp(1e-6*np.random.randn(N)))
+            self.C = np.diag(stds**2 * exp(1e-6*(np.random.rand(N)-0.5)))
             self.dC = np.diag(self.C)
             self.Zneg = np.zeros((N, N))
         self.D = stds
@@ -1429,9 +1502,10 @@ class CMAEvolutionStrategy(OOOptimizer):
         opts['seed'] = int(opts['seed'])
         np.random.seed(opts['seed'])
         
+        self.sent_solutions = SolutionDict()
         self.best = BestSolution()
         
-        out = {}
+        out = {}  # TODO: obsolete, replaced by method results()? 
         out['best'] = self.best
         # out['hsigcount'] = 0
         out['termination'] = {}
@@ -1470,7 +1544,7 @@ class CMAEvolutionStrategy(OOOptimizer):
                     s += ' iterations'
                     s += ' (1/ccov=' + str(round(1./(self.sp.c1+self.sp.cmu))) + ')'
                 print('   Covariance matrix is diagonal' + s) 
-
+        
     #____________________________________________________________
     #____________________________________________________________
     def ask(self, number=None, xmean=None, sigma_fac=1):
@@ -1505,20 +1579,28 @@ class CMAEvolutionStrategy(OOOptimizer):
         :See: `ask_and_eval`, `ask_geno`, `tell`
                 
         """
-        pop = self.ask_geno(number, xmean, sigma_fac)
+        pop_geno = self.ask_geno(number, xmean, sigma_fac)
+        
         
         # N,lambda=20,200: overall CPU 7s vs 5s == 40% overhead, even without bounds!
+        #                  new data: 11.5s vs 9.5s == 20%
         # TODO: check here, whether this is necessary? 
         # return [self.gp.pheno(x, copy=False, bounds=self.gp.bounds) for x in pop]  # probably fine
         # return [Solution(self.gp.pheno(x, copy=False), copy=False) for x in pop]  # here comes the memory leak, now solved  
-        return [Solution(self.gp.pheno(x, copy=False), copy=False).repair(self.gp.bounds) for x in pop]  
-        
-        # TODO: check out this:
-        return [Solution(x, gp=self.gp).repair(self.gp.bounds) for x in pop]  
-        # TODO: check out this (old):
-        # return [Solution(x, gp=self.gp, bounds=self.gp.bounds) for x in pop]
-        # and use solution.geno in tell()
+        # pop_pheno = [Solution(self.gp.pheno(x, copy=False), copy=False).repair(self.gp.bounds) for x in pop_geno]
+        pop_pheno = [self.gp.pheno(x, copy=True, bounds=self.gp.bounds) for x in pop_geno]
 
+        if not self.gp.isidentity or use_sent_solutions:  # costs 25% in CPU performance with N,lambda=20,200
+            # archive returned solutions, first clean up archive
+            if self.countiter % 30/self.popsize**0.5 < 1:
+                self.sent_solutions.truncate(0, self.countiter - 1 - 3 * self.N/self.popsize**0.5)
+            # insert solutions
+            for i in xrange(len(pop_geno)):
+                self.sent_solutions[pop_pheno[i]] = {'geno': pop_geno[i], 
+                                            'pheno': pop_pheno[i], 
+                                            'iteration': self.countiter}
+        return pop_pheno
+    
     #____________________________________________________________
     #____________________________________________________________
     def ask_geno(self, number=None, xmean=None, sigma_fac=1):
@@ -1551,6 +1633,13 @@ class CMAEvolutionStrategy(OOOptimizer):
             self.tic = time.clock()  # backward compatible
             self.elapsed_time = ElapsedTime()
 
+        if self.opts['CMA_AII']:
+            if self.countiter == 0:
+                self.aii = AII(self.x0, self.sigma0)
+            self.flgtelldone = False
+            pop = self.aii.ask(number)
+            return pop
+        
         sigma = sigma_fac * self.sigma
 
         # update parameters for sampling the distribution
@@ -1581,7 +1670,23 @@ class CMAEvolutionStrategy(OOOptimizer):
             self.ary = [] 
 
         # each row is a solution
-        self.ary = np.dot(self.B, (self.D * self.randn((number, self.N))).T).T
+        arz = self.randn((number, self.N))
+        if number == self.sp.popsize:
+            self.arz = arz
+        else:
+            pass
+            # print 'damn'
+        if 11 < 3:  # normalize the average length to chiN
+            for i in xrange(len(arz)):
+                # arz[i] *= exp(self.randn(1)[0] / 8)
+                ss = sum(arz[i]**2)**0.5
+                arz[i] *= self.const.chiN / ss
+            # arz *= 1 * self.const.chiN / np.mean([sum(z**2)**0.5 for z in arz])
+              
+        # fac = np.mean(sum(arz**2, 1)**0.5)
+        # print fac
+        # arz *= self.const.chiN / fac
+        self.ary = np.dot(self.B, (self.D * arz).T).T
         pop = xmean + sigma * self.ary
         self.evaluations_per_f_value = 1
 
@@ -1601,12 +1706,19 @@ class CMAEvolutionStrategy(OOOptimizer):
 
         """
         try:
-            dx = x.geno - self.mean  
+            # dx = x.geno - self.mean, repair or boundary handling is not taken into account 
+            dx = self.sent_solutions[x]['geno'] - self.mean
         except:
+            print 'WARNING: use of geno is depreciated'
             dx = self.gp.geno(x, copy=True) - self.mean
-            
-        dx *= self.sigma * (sum(np.random.randn(self.N)**2) / sum((np.dot(self.B.T, dx) / self.D)**2))**0.5
-        return Solution(self.mean - dx, gp=self.gp).repair(self.gp.bounds)
+        dx *= sum(self.randn(self.N)**2)**0.5 / self.mahalanobisNorm(dx)
+        x = self.mean - dx
+        y = self.gp.pheno(x, bounds=self.gp.bounds)
+        if not self.gp.isidentity or use_sent_solutions:  # costs 25% in CPU performance with N,lambda=20,200
+            self.sent_solutions[y] = {'geno': x, 
+                                        'pheno': y, 
+                                        'iteration': self.countiter}
+        return y
         
     def mirror_penalized(self, f_values, idx):
         """obsolete and subject to removal (TODO), 
@@ -1736,6 +1848,7 @@ class CMAEvolutionStrategy(OOOptimizer):
         
         # do the work
         fit = []  # or np.NaN * np.empty(number)
+        X_first = self.ask(popsize)
         X = []
         for k in xrange(int(popsize)):
             nreject = -1
@@ -1743,13 +1856,34 @@ class CMAEvolutionStrategy(OOOptimizer):
             while f in (np.NaN, None):  # rejection sampling
                 nreject += 1
                 if k < popsize - nmirrors or nreject:  
-                    x = self.ask(1, xmean, sigma_fac)[0] 
+                    if nreject:
+                        x = self.ask(1, xmean, sigma_fac)[0]
+                    else:
+                        x = X_first.pop(0) 
                 else:  # mirrored sample
                     if k == popsize - nmirrors and selective_mirroring:
                         self.mirrors_idx = np.argsort(fit)[-1:-1-nmirrors:-1]
                     x = self.get_mirror(X[self.mirrors_idx[popsize - 1 - k]])
                 if nreject == 1 and k >= popsize - nmirrors:
                     self.mirrors_rejected_idx.append(k)
+
+                # contraints handling test hardwired ccccccccccc
+                if 11 < 3 and self.opts['vv'] and nreject < 2:  # trying out negative C-update as constraints handling
+                    try:
+                        tmp = self.constraints_paths
+                    except:
+                        k = 1
+                        self.constraints_paths = [np.zeros(self.N) for _i in xrange(k)]
+                    Izero = zeros([self.N, self.N])
+                    for i in xrange(self.N):
+                        if x[i] < 0:
+                            Izero[i][i] = 1
+                            self.C -= self.opts['vv'] * Izero
+                            Izero[i][i] = 0
+                    if 1 < 3 and sum([ (9 + i + 1) * x[i] for i in xrange(self.N)]) > 50e3: 
+                        self.constraints_paths[0] = 0.9 * self.constraints_paths[0] + 0.1 * (x - self.mean) / self.sigma
+                        self.C -= (self.opts['vv'] / self.N) * np.outer(constraints_paths[0], constraints_paths[0]) 
+                                
                 f = func(x, *args)
                 if f not in (np.NaN, None) and evaluations > 1:
                     f = aggregation([f] + [func(x, *args) for _i in xrange(int(evaluations-1))])
@@ -1774,7 +1908,7 @@ class CMAEvolutionStrategy(OOOptimizer):
         ---------
             `solutions` 
                 list or array of candidate solution points (of
-                type `cma.Solution` or `numpy.ndarray`), most presumably before 
+                type `numpy.ndarray`), most presumably before 
                 delivered by method `ask()` or `ask_and_eval()`.
             `function_values`
                 list or array of objective function values 
@@ -1792,7 +1926,7 @@ class CMAEvolutionStrategy(OOOptimizer):
         Details
         -------
         `tell()` updates the parameters of the multivariate
-        normal search distribtion, namely covariance matrix and
+        normal search distribution, namely covariance matrix and
         step-size and updates also the attributes `countiter` and 
         `countevals`. To check the points for consistency is quadratic 
         in the dimension (like sampling points). 
@@ -1857,7 +1991,7 @@ class CMAEvolutionStrategy(OOOptimizer):
             
         self.countiter += 1  # >= 1 now
         self.countevals += sp.popsize * self.evaluations_per_f_value
-        self.best.update(solutions, function_values, self.countevals)
+        self.best.update(solutions, self.sent_solutions, function_values, self.countevals)
         
         flgseparable = self.opts['CMA_diagonal'] is True \
                        or self.countiter <= self.opts['CMA_diagonal'] 
@@ -1874,7 +2008,7 @@ class CMAEvolutionStrategy(OOOptimizer):
         fit = self.fit  # make short cut
         
         # CPU for N,lam=20,200: this takes 10s vs 7s 
-        fit.bndpen = self.boundPenalty.update(function_values, self)(solutions)
+        fit.bndpen = self.boundPenalty.update(function_values, self)(solutions, self.sent_solutions, self.gp)
         # for testing: 
         # fit.bndpen = self.boundPenalty.update(function_values, self)([s.unrepaired for s in solutions])
         fit.idx = np.argsort(array(fit.bndpen) + array(function_values))
@@ -1890,7 +2024,7 @@ class CMAEvolutionStrategy(OOOptimizer):
         # if len(self.fit.histbest) < 120+30*N/sp.popsize or  # does not help, as tablet in the beginning is the critical counter-case
         if ((self.countiter % 5) == 0):  # 20 percent of 1e5 gen.
             fit.histbest.insert(0, fit.fit[0])
-            fit.histmedian.insert(0, np.median(fit.fit) if len(fit.fit<21) 
+            fit.histmedian.insert(0, np.median(fit.fit) if len(fit.fit) < 21 
                                     else fit.fit[self.popsize // 2])
         if len(fit.histbest) > 2e4: # 10 + 30*N/sp.popsize:
             fit.histbest.pop()
@@ -1898,44 +2032,66 @@ class CMAEvolutionStrategy(OOOptimizer):
         if len(fit.hist) > 10 + 30*N/sp.popsize:
             fit.hist.pop()
 
+        if self.opts['CMA_AII']:
+            self.aii.tell(solutions, function_values)
+            self.flgtelldone = True
+            # for output: 
+            self.mean = self.aii.mean
+            self.dC = self.aii.sigmai**2
+            self.sigma = self.aii.sigma
+            self.D = 1e-11 + (self.aii.r**2)**0.5
+            self.more_to_write = [self.aii.sigma_r]
+            return
+
         # TODO: clean up inconsistency when an unrepaired solution is available and used
         pop = []  # create pop from input argument solutions
         for s in solutions:  # use phenotype before Solution.repair() 
-            if type(s) is Solution and s.unrepaired is not None:
-                pop.append(s.unrepaired)  # TODO: this might not be desirable, if solutions were modified/injected
-            else:
-                pop.append(s)
-            
-            if type(pop[-1]) is Solution and pop[-1].isgeno:  # not quite likely
-                pass  # need to do nothing
-            elif 11 < 3 and type(pop[-1]) is Solution and s.geno is not None:
-                pop[-1] = s.geno  # TODO: this might not be desirable, if solutions were modified/injected 
-            else:  # most likely case
-                # TODO: check whether self.gp.geno is efficient 
-                pop[-1] = self.gp.geno(pop[-1], copy=copy) 
-
+            if use_sent_solutions:
+                x = self.sent_solutions.pop(s, None)  # 12.7s vs 11.3s with N,lambda=20,200
+                if x is not None:
+                    pop.append(x['geno'])
+                    # TODO: keep additional infos or don't pop s from sent_solutions in the first place
+                else: 
+                    print 'WARNING: solution not found in ``self.sent_solutions``'
+                    pop.append(self.gp.geno(s, copy=copy))  # cannot recover the original genotype with boundary handling
+                    self.repair_genotype(pop[-1])  # necessary if pop[-1] was changed or injected by the user. 
+                    print 'repaired'
+            else:  # TODO: to be removed?
+                print 'WARNING: ``geno`` mapping depreciated'
+                pop.append(self.gp.geno(s, copy=copy)) 
+                # self.repair_genotype(pop[-1])  # necessary or not? 
+                # print 'repaired'
+  
         mold = self.mean
         sigma_fac = 1
 
         # check and normalize each x - m
         # check_points is a flag or an index list
         # should also a number possible (first check_points points)? 
-        if np.any(check_points):  # useful in case of injected solutions and/or adaptive encoding
-            idx = xrange(sp.popsize)  
+        if check_points not in (None, False, 0, [], ()):  # useful in case of injected solutions and/or adaptive encoding
             try: 
                 if len(check_points):
                     idx = check_points
             except:
-                pass
+                idx = xrange(sp.popsize)  
             
-            self.clip_or_fit_solutions(pop, idx)
+            for k in idx:
+                self.repair_genotype(pop[k])
                 
+        # sort pop  
         if type(pop) is not array: # only arrays can be multiple indexed
             pop = array(pop, copy=False)
 
-        # sort pop and compute new mean 
         pop = pop[fit.idx] 
 
+        if self.opts['CMA_elitist'] and self.best.f < fit.fit[0]:
+            xp = [self.best.xdict['geno']]
+            # xp = [self.gp.geno(self.best.x[:])]  # TODO: remove
+            # print self.mahalanobisNorm(xp[0]-self.mean)
+            self.clip_or_fit_solutions(xp, [0])
+            pop = array([xp[0]] + list(pop))
+
+        # compute new mean 
         self.mean = mold + self.sp.cmean * \
                     (sum(sp.weights * pop[0:sp.mu].T, 1) - mold)
         
@@ -1944,7 +2100,7 @@ class CMAEvolutionStrategy(OOOptimizer):
         # CAVE: upper_length=sqrt(2)+2 is too restrictive, test upper_length = sqrt(2*N) thoroughly.
         # simple test case injecting self.mean: 
         # self.mean = 1e-4 * self.sigma * np.random.randn(N)
-        if 11 < 3 and self.opts['vv'] and check_points: 
+        if 11 < 3 and self.opts['vv'] and check_points:  # TODO: check_points might be an index-list
             cmean = self.sp.cmean / min(1, (sqrt(self.opts['vv']*N)+2) / ( # abuse of cmean
                 (sqrt(self.sp.mueff) / self.sp.cmean) * 
                 self.mahalanobisNorm(self.mean - mold))) 
@@ -1968,8 +2124,20 @@ class CMAEvolutionStrategy(OOOptimizer):
                   (sqrt(sp.cs*(2-sp.cs)*sp.mueff)  / self.sigma / cmean) * \
                   dot(self.B, (1./self.D) * dot(self.B.T, self.mean - mold))
                   
-        # "hsig"
+        # "hsig", correction with self.countiter seems not necessary, also pc starts with zero
         hsig = sum(self.ps**2) / (1-(1-sp.cs)**(2*self.countiter)) / self.N < 2 + 4./(N+1)
+        if 11 < 3:
+            # hsig = 1
+            # sp.cc = 4 / (N + 4)
+            # sp.cs = 4 / (N + 4)
+            # sp.cc = 1
+            # sp.damps = 2  # 
+            # sp.CMA_on = False
+            # c1 = 0  # 2 / ((N + 1.3)**2 + 0 * sp.mu) # 1 / N**2
+            # cmu = min([1 - c1, cmu])
+            if self.countiter == 1:
+                print 'parameters modified'
+        # hsig = sum(self.ps**2) / self.N < 2 + 4./(N+1)
         # adjust missing variance due to hsig, in 4-D with damps=1e99 and sig0 small  
         #       hsig leads to premature convergence of C otherwise
         #hsiga = (1-hsig**2) * c1 * cc * (2-cc)  # to be removed in future
@@ -2003,7 +2171,7 @@ class CMAEvolutionStrategy(OOOptimizer):
                 Z = dot((cmu * sp.weights) * Z.T, Z)  # learning rate integrated
                 if self.sp.neg.cmuexp:
                     tmp = (pop[-sp.neg.mu:] - mold) / self.sigma
-                    self.Zneg *= 1 - self.sp.neg.cmuexp  # not necessary?
+                    self.Zneg *= 1 - self.sp.neg.cmuexp  # for some reason necessary?
                     self.Zneg += dot(sp.neg.weights * tmp.T, tmp) - self.C
                     # self.update_exponential(dot(sp.neg.weights * tmp.T, tmp) - 1 * self.C, -1*self.sp.neg.cmuexp)
                         
@@ -2032,10 +2200,20 @@ class CMAEvolutionStrategy(OOOptimizer):
                 # idx = self.mirror_idx_cov()  # take half of mirrored vectors for negative update
                 
         # step-size adaptation, adapt sigma
-        self.sigma *= sigma_fac * \
-                        np.exp(min(1, (sp.cs/sp.damps) *
-                                (sqrt(sum(self.ps**2))/self.const.chiN - 1)))
-
+        if 11 < 3:  # 
+            self.sigma *= sigma_fac * \
+                            np.exp((min((1000, (sp.cs/sp.damps/2) *
+                                    (sum(self.ps**2)/N - 1)))))
+        else:
+            self.sigma *= sigma_fac * \
+                            np.exp((min((1, (sp.cs/sp.damps) *
+                                    (sqrt(sum(self.ps**2))/self.const.chiN - 1)))))
+        if 11 < 3:
+            # derandomized MSR = natural gradient descent
+            lengths = array([sum(z**2)**0.5 for z in self.arz[fit.idx[:self.sp.mu]]])
+            # print lengths[0::int(self.sp.mu/5)]
+            self.sigma *= np.exp(self.sp.mueff**0.5 * dot(self.sp.weights, lengths / self.const.chiN - 1))**(2/(N+1))
+            
         if 11 < 3 and self.opts['vv']:
             if self.countiter < 2:
                 print('constant sigma applied')
@@ -2044,8 +2222,11 @@ class CMAEvolutionStrategy(OOOptimizer):
 
         if self.sigma * min(self.dC)**0.5 < self.opts['minstd']:
             self.sigma = self.opts['minstd'] / min(self.dC)**0.5
-        if self.sigma * min(self.D) < self.opts['mindx']:
-            self.sigma = self.opts['mindx'] / min(self.D)
+        g = self.countiter
+        N = self.N
+        mindx = eval(self.opts['mindx']) if type(self.opts['mindx']) == type('') else self.opts['mindx'] 
+        if self.sigma * min(self.D) < mindx:
+            self.sigma = mindx / min(self.D)
 
         # TODO increase sigma in case of a plateau? 
 
@@ -2073,29 +2254,37 @@ class CMAEvolutionStrategy(OOOptimizer):
         In particular the frequency of long vectors appearing in pop[idx] - self.mean is limited. 
         
         """
+        for k in idx:
+            self.repair_genotype(pop[k])
+            
+    def repair_genotype(self, x):
+        """make sure that solutions fit to sample distribution, this interface will probably change. 
+        
+        In particular the frequency of x - self.mean being long is limited. 
+        
+        """
         mold = self.mean
         if 1 < 3:  # hard clip at upper_length
             upper_length = self.N**0.5 + 2 * self.N / (self.N+2)  # should become an Option 
-            for k in idx: 
-                fac = self.mahalanobisNorm(pop[k] - mold) / upper_length
-                
-                if fac > 1:
-                    pop[k] = (pop[k] - mold) / fac + mold
-                    # print self.countiter, k, fac, self.mahalanobisNorm(pop[k] - mold)
-                    # adapt also sigma: which are the trust-worthy/injected solutions? 
-                elif 11 < 3 and k == fit.idx[0]: 
-                    return exp(np.tanh(((upper_length*fac)**2/N-1)/2) / 2)
-                return 1  # sigma_fac, not in use
+            fac = self.mahalanobisNorm(x - mold) / upper_length
+            
+            if fac > 1:
+                x = (x - mold) / fac + mold
+                # print self.countiter, k, fac, self.mahalanobisNorm(pop[k] - mold)
+                # adapt also sigma: which are the trust-worthy/injected solutions? 
+            elif 11 < 3: 
+                return exp(np.tanh(((upper_length*fac)**2/N-1)/2) / 2)
         else:
             if 'checktail' not in self.__dict__:  # hasattr(self, 'checktail')  
                 from check_tail_smooth import CheckTail  # for the time being
                 self.checktail = CheckTail()
                 print('untested feature checktail is on')
-            for k in idx: 
-                fac = self.checktail.addchin(self.mahalanobisNorm(pop[k] - mold))
-                
-                if fac < 1:
-                    pop[k] = fac * (pop[k] - mold) + mold
+            fac = self.checktail.addchin(self.mahalanobisNorm(x - mold))
+            
+            if fac < 1:
+                x = fac * (x - mold) + mold
+        
+        return 1.0  # sigma_fac, not in use
                 
             
     #____________________________________________________________
@@ -2117,35 +2306,44 @@ class CMAEvolutionStrategy(OOOptimizer):
             # self.C = self.Zpos + Cs * Mh.expms(-self.sp.neg.cmuexp*Csi*self.Zneg*Csi) * Cs
             self.Zneg = np.zeros((self.N, self.N))
 
+        if 11 < 3:  # normalize trace of C
+            s = sum(self.dC)
+            self.C *= self.N / s
+            self.dC *= self.N / s
         self.C = (self.C + self.C.T) / 2
         # self.C = np.triu(self.C) + np.triu(self.C,1).T  # should work as well
         # self.D, self.B = eigh(self.C) # hermitian, ie symmetric C is assumed
-        if self.opts['CMA_eigenmethod'] == -1:  
-            # pygsl
-            # easy to install (well, in Windows install gsl binaries first, 
-            # set system path to respective libgsl-0.dll (or cp the dll to
-            # python\DLLS ?), in unzipped pygsl edit
-            # gsl_dist/gsl_site_example.py into gsl_dist/gsl_site.py
-            # and run "python setup.py build" and "python setup.py install"
-            # in MINGW32)
-            if 1 < 3:  # import pygsl on the fly
-                try:
-                    import pygsl.eigen.eigenvectors  # TODO efficient enough?
-                except ImportError:
-                    print('WARNING: could not find pygsl.eigen module, either install pygsl \n' +
-                          '  or set option CMA_eigenmethod=1 (is much slower), option set to 1')
-                    self.opts['CMA_eigenmethod'] = 0  # use 0 if 1 is too slow
-                    
-                self.D, self.B = pygsl.eigen.eigenvectors(self.C)
-
-        elif self.opts['CMA_eigenmethod'] == 0: 
-            # TODO: thoroughly test np.linalg.eigh 
-            #       numpy.linalg.eig crashes in 200-D
-            #       and EVecs with same EVals are not orthogonal 
-            self.D, self.B = np.linalg.eigh(self.C)  # self.B[i] is a row and not an eigenvector
-        else:  # is overall two;ten times slower in 10;20-D
-            self.D, self.B = Misc.eig(self.C)  # def eig, see below
         
+        if type(self.opts['CMA_eigenmethod']) == type(1): 
+            print('WARNING: option CMA_eigenmethod should be a function, not an integer')
+            if self.opts['CMA_eigenmethod'] == -1:  
+                # pygsl
+                # easy to install (well, in Windows install gsl binaries first, 
+                # set system path to respective libgsl-0.dll (or cp the dll to
+                # python\DLLS ?), in unzipped pygsl edit
+                # gsl_dist/gsl_site_example.py into gsl_dist/gsl_site.py
+                # and run "python setup.py build" and "python setup.py install"
+                # in MINGW32)
+                if 1 < 3:  # import pygsl on the fly
+                    try:
+                        import pygsl.eigen.eigenvectors  # TODO efficient enough?
+                    except ImportError:
+                        print('WARNING: could not find pygsl.eigen module, either install pygsl \n' +
+                              '  or set option CMA_eigenmethod=1 (is much slower), option set to 1')
+                        self.opts['CMA_eigenmethod'] = 0  # use 0 if 1 is too slow
+                        
+                    self.D, self.B = pygsl.eigen.eigenvectors(self.C)
+    
+            elif self.opts['CMA_eigenmethod'] == 0: 
+                # TODO: thoroughly test np.linalg.eigh 
+                #       numpy.linalg.eig crashes in 200-D
+                #       and EVecs with same EVals are not orthogonal 
+                self.D, self.B = np.linalg.eigh(self.C)  # self.B[i] is a row and not an eigenvector
+            else:  # is overall two;ten times slower in 10;20-D
+                self.D, self.B = Misc.eig(self.C)  # def eig, see below
+        else:
+            self.D, self.B = self.opts['CMA_eigenmethod'](self.C)
+            
         # assert(sum(self.D-DD) < 1e-6)
         # assert(sum(sum(np.dot(BB, BB.T)-np.eye(self.N))) < 1e-6)
         # assert(sum(sum(np.dot(BB * DD, BB.T) - self.C)) < 1e-6)
@@ -2186,11 +2384,11 @@ class CMAEvolutionStrategy(OOOptimizer):
         if BDpair:
             B, D = BDpair
         else:
-            D, B = np.linalg.eigh(self.C)
+            D, B = self.opts['CMA_eigenmethod'](self.C)
             D **= 0.5
         Csi = dot(B, (B / D).T)
         Cs = dot(B, (B * D).T)
-        self.C = dot(Cs, dot(Mh.expms(eta * dot(Csi, dot(Z, Csi))), Cs))
+        self.C = dot(Cs, dot(Mh.expms(eta * dot(Csi, dot(Z, Csi)), self.opts['CMA_eigenmethod']), Cs))
 
     #____________________________________________________________
     #____________________________________________________________
@@ -2230,11 +2428,11 @@ class CMAEvolutionStrategy(OOOptimizer):
 
         Arguments
         ---------
-            X
+            `X`
               (all) solution points in chronological order, phenotypic 
               representation. The number of points must be a multiple
               of popsize. 
-            function_values 
+            `function_values` 
               respective objective function values
 
         Details
@@ -2340,10 +2538,10 @@ class CMAEvolutionStrategy(OOOptimizer):
             
         # console display 
         if modulo:
-            if 0.1*(self.countiter-1) % modulo == 0:
+            if (self.countiter-1) % (10 * modulo) < 1:
                 self.disp_annotation()
             if self.countiter > 0 and (self.stop() or self.countiter < 4 
-                              or self.countiter % modulo == 0): 
+                              or self.countiter % modulo < 1): 
                 if self.opts['verb_time']:
                     toc = self.elapsed_time()  
                     stime = str(int(toc//60))+':'+str(round(toc%60,1))
@@ -2359,46 +2557,12 @@ class CMAEvolutionStrategy(OOOptimizer):
                                 stime)))
                 # if self.countiter < 4:
                 sys.stdout.flush()
-# end class cma 
 
-#____________________________________________________________
-#____________________________________________________________
-#
-class ElapsedTime(object):
-    """32-bit C overflows after int(2**32/1e6) == 4294s about 72 min"""
-    def __init__(self):
-        self.tic0 = time.clock()
-        self.tic = self.tic0
-        self.lasttoc = time.clock()
-        self.lastdiff = time.clock() - self.lasttoc
-        self.time_to_add = 0
-        self.messages = 0
-
-    def __call__(self):
-        toc = time.clock()
-        if toc - self.tic >= self.lasttoc - self.tic: 
-            self.lastdiff = toc - self.lasttoc
-            self.lasttoc = toc
-        else:  # overflow, reset self.tic
-            if self.messages < 10:
-                self.messages += 1
-                print('timing overflow, last difference estimated:')
-                print(self.tic0, self.tic, self.lasttoc, toc, toc - self.lasttoc, self.lastdiff)
-            
-            self.time_to_add += self.lastdiff + self.lasttoc - self.tic
-            self.tic = toc  # reset 
-            self.lasttoc = toc
-
-        return toc - self.tic + self.time_to_add
-
-#____________________________________________________________
-#____________________________________________________________
-#
 class Options(dict):
     """``Options()`` returns a dictionary with the available options and their
     default values for function fmin and for class CMAEvolutionStrategy.
     
-    ``Options(opts)`` returns the subset of recognized options in opts.  
+    ``Options(opts)`` returns the subset of recognized options in dict(opts).  
     
     ``Options('pop')`` returns a subset of recognized options that contain
     'pop' in there keyword name, value or description. 
@@ -2407,7 +2571,7 @@ class Options(dict):
     or CMAEvolutionStrategy, are evaluated using "N" and "popsize" as 
     known values for dimension and population size (sample size, number 
     of new solutions per iteration). All default option values are such
-    string. 
+    a string. 
 
     Details
     -------
@@ -2426,11 +2590,10 @@ class Options(dict):
     ::
     
         import cma
-        cma.Options('tol')  # shortcut for cma.Options().match('tol')
-        o = cma.Options()
-        o.match('verb')
-    
-    all options that contain 'tol' in their name or description. 
+        cma.Options('tol') 
+        
+    is a shortcut for cma.Options().match('tol') that returns all options 
+    that contain 'tol' in their name or description. 
 
     :See: `fmin`(), `CMAEvolutionStrategy`, `CMAParameters`
      
@@ -2589,7 +2752,7 @@ class Options(dict):
         try: 
             if type(val) is str:
                 val = val.split('#')[0].strip()  # remove comments
-                if key.find('filename') < 0:
+                if type(val) == type('') and key.find('filename') < 0 and key.find('mindx') < 0:
                     val = eval(val, globals(), loc)
             # invoke default
             # TODO: val in ... fails with array type, because it is applied element wise!
@@ -2742,15 +2905,18 @@ class CMAParameters(object):
         """Compute strategy parameters as a function
         of dimension and population size """
 
-        alpha_cc = 0.0  # TODO: should be come 1.0 in near future
+        alpha_cc = 1.0  # cc-correction for mueff, was zero before
         
         def cone(df, mu, N, alphacov=2.0):
-            """rank one update learning rate, reduce alphacov on noisy problems, say to 0.5"""
+            """rank one update learning rate, ``df`` is disregarded and obsolete, reduce alphacov on noisy problems, say to 0.5"""
             return alphacov / ((N + 1.3)**2 + mu)
 
         def cmu(df, mu, alphamu=0.0, alphacov=2.0):
             """rank mu learning rate, disregarding the constrant cmu <= 1 - cone"""
-            return alphacov * (alphamu + mu - 2 + 1/mu) / ((N + 2)**2 + alphacov * mu / 2)
+            c = alphacov * (alphamu + mu - 2 + 1/mu) / ((N + 2)**2 + alphacov * mu / 2)
+            # c = alphacov * (alphamu + mu - 2 + 1/mu) / (2 * (N + 2)**1.5 + alphacov * mu / 2)
+            # print 'cmu =', c
+            return c
             
         def conedf(df, mu, N):
             """used for computing separable learning rate"""
@@ -2792,10 +2958,15 @@ class CMAParameters(object):
         if sp.lam_mirr > sp.popsize // 2:
             raise _Error("fraction of mirrors in the population as read from option CMA_mirrors cannot be larger 0.5, " +
                          "theoretically optimal is 0.16") 
-        sp.weights = log(sp.mu_f + 0.5) - log(1 + np.arange(sp.mu))
+        sp.weights = log(sp.popsize / 2.0 + 0.5) - log(1 + np.arange(sp.mu))
+        if 11 < 3:  # equal recombination weights
+            sp.mu = sp.popsize // 4
+            sp.weights = np.ones(sp.mu)
+            print sp.weights[:10]
         sp.weights /= sum(sp.weights)
         sp.mueff = 1 / sum(sp.weights**2)
         sp.cs = (sp.mueff + 2) / (N + sp.mueff + 3)
+        # sp.cs = (sp.mueff + 2) / (N + 1.5*sp.mueff + 1)
         sp.cc = (4 + alpha_cc * sp.mueff / N) / (N + 4 + alpha_cc * 2 * sp.mueff / N)  
         sp.cc_sep = (1 + 1/N + alpha_cc * sp.mueff / N) / (N**0.5 + 1/N + alpha_cc * 2 * sp.mueff / N) # \not\gg\cc
         sp.rankmualpha = opts['CMA_rankmualpha']
@@ -2832,8 +3003,18 @@ class CMAParameters(object):
         if not opts['CMA_on'] and opts['CMA_on'] not in (None,[],(),''): 
             sp.CMA_on = False
             # sp.c1 = sp.cmu = sp.c1_sep = sp.cmu_sep = 0
-        sp.damps = opts['CMA_dampfac'] * (1 - 0*sp.lam_mirr/sp.popsize + 2*max(0,sqrt((sp.mueff-1)/(N+1))-1) + sp.cs) 
-        # sp.damps = opts['CMA_dampfac'] * (2 - 0*sp.lam_mirr/sp.popsize) * sp.mueff/sp.popsize + 0.3 + sp.cs  # nicer future setting 
+        
+        sp.damps = opts['CMA_dampfac'] * (0.5 + 
+                                          0.5 * min([1, (sp.lam_mirr/(0.159*sp.popsize) - 1)**2])**1 + 
+                                          2 * max([0, ((sp.mueff-1) / (N+1))**0.5 - 1]) + sp.cs
+                                          ) 
+        if 11 < 3:
+            # this is worse than damps = 1 + sp.cs for the (1,10000)-ES on 40D parabolic ridge
+            sp.damps = 0.3 + 2 * max([sp.mueff/sp.popsize, ((sp.mueff-1)/(N+1))**0.5 - 1]) + sp.cs
+        if 11 < 3:
+            # this does not work for lambda = 4*N^2 on the parabolic ridge
+            sp.damps = opts['CMA_dampfac'] * (2 - 0*sp.lam_mirr/sp.popsize) * sp.mueff/sp.popsize + 0.3 + sp.cs  # nicer future setting 
+            print 'damps =', sp.damps
         if 11 < 3:
             sp.damps = 10 * sp.damps  # 1e99 # (1 + 2*max(0,sqrt((sp.mueff-1)/(N+1))-1)) + sp.cs; 
             # sp.damps = 20 # 1. + 20 * sp.cs**-1  # 1e99 # (1 + 2*max(0,sqrt((sp.mueff-1)/(N+1))-1)) + sp.cs; 
@@ -2940,6 +3121,7 @@ class CMAStopDict(dict):
         # / 5 reflects the sparsity of histbest/median
         # / 2 reflects the left and right part to be compared
         l = int(max(opts['tolstagnation'] / 5. / 2, len(es.fit.histbest) / 10));
+        # TODO: why max(..., len(histbest)/10) ???
         # TODO: the problem in the beginning is only with best ==> ???
         if 11 < 3:  # 
             print(es.countiter, (opts['tolstagnation'], es.countiter > N * (5 + 100 / es.popsize),  
@@ -2962,8 +3144,6 @@ class CMAStopDict(dict):
                         -np.median(es.fit.histbest[:l]) + np.median(es.fit.histbest[l:2*l])))
             es.more_to_write = [(10**t if t < 0 else t + 1) for t in tmp] # the latter to get monotonicy
 
-        # TODO: add option stoponequalfunvals and test here...
-
         if 1 < 3:
             # non-user defined, method specific
             # noeffectaxis (CEC: 0.1sigma), noeffectcoord (CEC:0.2sigma), conditioncov
@@ -2971,10 +3151,9 @@ class CMAStopDict(dict):
                          any([es.mean[i] == es.mean[i] + 0.2*es.sigma*sqrt(es.dC[i])
                               for i in xrange(N)]))
             if opts['CMA_diagonal'] is not True and es.countiter > opts['CMA_diagonal']: 
+                i = es.countiter % N
                 self._addstop('noeffectaxis',
-                             all([es.mean[i] == es.mean[i] +
-                                  0.1*es.sigma * es.D[es.countiter%N]
-                                  * es.B[i,es.countiter%N] for i in xrange(N)]))
+                             sum(es.mean == es.mean + 0.1 * es.sigma * es.D[i] * es.B[:, i]) == N)
             self._addstop('conditioncov',
                          es.D[-1] > 1e7 * es.D[0], 1e14)  # TODO 
 
@@ -2982,19 +3161,22 @@ class CMAStopDict(dict):
                           es.callbackstop)  # termination_callback
         if len(self):
             self._addstop('flat fitness: please (re)consider how to compute the fitness more elaborate',
-                         # len(es.fit.hist) > 9 and \
+                         len(es.fit.hist) > 9 and \
                          max(es.fit.hist) == min(es.fit.hist))
+        if 11 < 3 and opts['vv'] == 321:
+            self._addstop('||xmean||^2<ftarget', sum(es.mean**2) <= opts['ftarget'])
 
         return self
 
 #_____________________________________________________________________
 #_____________________________________________________________________
 #
-class OptimDataLogger(object):
+class BaseDataLogger(object):
     """"abstract" base class for a data logger that can be used with an `OOOptimizer`"""
     def add(self, optim=None, more_data=[]):
         """abstract method, add a "data point" from the state of `optim` into the 
-        logger, the argument `optim` can be omitted if it was `register()`-ed before"""
+        logger, the argument `optim` can be omitted if it was `register()`-ed before, 
+        acts like an event handler"""
         OOOptimizer.abstract()
     def register(self, optim):
         """abstract method, register an optimizer `optim`, only needed if `add()` is 
@@ -3002,18 +3184,18 @@ class OptimDataLogger(object):
         self.optim = optim 
     def disp(self):
         """display some data trace (not implemented)"""
-        print('method OptimDataLogger.disp() not implemented, to be done in subclass ' + str(type(self)))
+        print('method BaseDataLogger.disp() not implemented, to be done in subclass ' + str(type(self)))
     def plot(self):
         """plot data (not implemented)"""
-        print('method OptimDataLogger.plot() is not implemented, to be done in subclass ' + str(type(self)))
+        print('method BaseDataLogger.plot() is not implemented, to be done in subclass ' + str(type(self)))
     def data(self):
         """return logged data in a dictionary (not implemented)"""
-        print('method OptimDataLogger.data() is not implemented, to be done in subclass ' + str(type(self)))
+        print('method BaseDataLogger.data() is not implemented, to be done in subclass ' + str(type(self)))
                 
 #_____________________________________________________________________
 #_____________________________________________________________________
 #
-class CMADataLogger(OptimDataLogger):  # might become a dict at some point
+class CMADataLogger(BaseDataLogger):  # might become a dict at some point
     """data logger for class `CMAEvolutionStrategy`. The logger is
     identified by its name prefix and writes or reads according 
     data files. 
@@ -3058,7 +3240,7 @@ class CMADataLogger(OptimDataLogger):  # might become a dict at some point
     default_prefix = 'outcmaes'
     names = ('axlen','fit','stddev','xmean','xrecentbest')
     
-    def __init__(self, name_prefix=default_prefix, modulo=None):
+    def __init__(self, name_prefix=default_prefix, modulo=1, append=False):
         """initialize logging of data from a `CMAEvolutionStrategy` instance, 
         default modulo expands to 1 == log with each call
         
@@ -3066,12 +3248,14 @@ class CMADataLogger(OptimDataLogger):  # might become a dict at some point
         # super(CMAData, self).__init__({'iter':[], 'stds':[], 'D':[], 'sig':[], 'fit':[], 'xm':[]})
         # class properties:
         self.counter = 0  # number of calls of add
-        self.modulo = 1 if modulo is None else modulo  # allows calling with None
+        self.modulo = modulo  # allows calling with None
+        self.append = append
         self.name_prefix = name_prefix if name_prefix else CMADataLogger.default_prefix 
         if type(self.name_prefix) == CMAEvolutionStrategy:
             self.name_prefix = self.name_prefix.opts.eval('verb_filenameprefix') 
+        self.registered = False
 
-    def register(self, es, append=False, modulo=None):
+    def register(self, es, append=None, modulo=None):
         """register a `CMAEvolutionStrategy` instance for logging, 
         ``append=True`` appends to previous data logged under the same name, 
         by default previous data are overwritten. 
@@ -3080,10 +3264,13 @@ class CMADataLogger(OptimDataLogger):  # might become a dict at some point
         if type(es) != CMAEvolutionStrategy:
             raise TypeError("only class CMAEvolutionStrategy can be registered for logging")
         self.es = es
+        if append is not None:
+            self.append = append
         if modulo is not None:
             self.modulo = modulo
-        if not append and self.modulo != 0:
+        if not self.append and self.modulo != 0:
             self.initialize()  # write file headers
+        self.registered = True
         return self
 
     def initialize(self, modulo=None):
@@ -3092,7 +3279,8 @@ class CMADataLogger(OptimDataLogger):  # might become a dict at some point
             self.modulo = modulo 
         try:
             es = self.es  # must have been registered
-        except AttributeError :
+        except AttributeError:
+            pass  # TODO: revise usage of es... that this can pass
             raise _Error('call register() before init()')
         
         # write headers for output
@@ -3208,14 +3396,16 @@ class CMADataLogger(OptimDataLogger):  # might become a dict at some point
             try:
                 es = self.es  # must have been registered
             except AttributeError :
-                raise _Error('call register() before add()')
+                raise _Error('call register() before add() or add(es)')
+        elif not self.registered:
+            self.register(es)  
         if type(es) is not CMAEvolutionStrategy:
             raise TypeError('<type \'CMAEvolutionStrategy\'> expected, found '
                             + str(type(es)) + ' in CMADataLogger.add')
         
         if 1 < 3:
             try: # TODO: find a more decent interface to store and pass recent_x
-                xrecent = es.out['recent_x']
+                xrecent = es.best.last.x
             except:
                 if self.counter == 2:  # by now a recent_x should be available
                     print('WARNING: es.out[\'recent_x\'] not found in CMADataLogger.add, count=' 
@@ -3268,7 +3458,8 @@ class CMADataLogger(OptimDataLogger):  # might become a dict at some point
                     f.write('0 0 0 0 0 '
                             + ' '.join(map(str,
                                               # TODO should be optional the phenotyp?
-                                              es.gp.geno(es.x0)))  
+                                              # es.gp.geno(es.x0)
+                                              es.mean))  
                             + '\n')
                 else:
                     f.write(str(es.countiter) + ' ' 
@@ -3607,7 +3798,7 @@ class CMADataLogger(OptimDataLogger):  # might become a dict at some point
         ax = array(axis())
         # ax[1] = max(minxend, ax[1])
         axis(ax)
-        text(ax[0], ax[2], # 10**(log10(ax[2])+0.05*(log10(ax[3])-log10(ax[2]))),
+        text(ax[0]+0.01, ax[2], # 10**(log10(ax[2])+0.05*(log10(ax[3])-log10(ax[2]))),
              '.f_recent=' + repr(dat.f[-1,5]) )
         
         # title('abs(f) (blue), f-min(f) (cyan), Sigma (green), Axis Ratio (red)')
@@ -3734,27 +3925,130 @@ class CMADataLogger(OptimDataLogger):  # might become a dict at some point
 #____________________________________________________________
 #____________________________________________________________
 # 
+def irg(ar):
+    return xrange(len(ar))
+class AII(object):  
+    """unstable experimental code, updates ps, sigma, sigmai, pr, r, sigma_r, mean, 
+    all from self. 
+    
+    Depends on that the ordering of solutions has not change upon calling update
+    
+    should become a OOOptimizer in far future?
+    
+    """
+    # Try: ps**2 - 1 instead of (ps**2)**0.5 / chi1 - 1: compare learning rate etc
+    # and dito for psr
+    
+    def __init__(self, x0, sigma0, randn=np.random.randn):
+        """TODO: check scaling of r-learing: seems worse than linear: 9e3 25e3 65e3 (10,20,40-D)"""
+        self.N = len(x0)
+        N = self.N
+        # parameters to play with:
+        # PROBLEM: smaller eta_r even fails on *axparallel* cigar!! Also dampi needs to be smaller then! 
+        self.dampi = 4 * N  # two times smaller is  
+        self.eta_r = 0 / N / 3   # c_r learning rate for direction, cigar: 4/N/3 is optimal in 10-D, 10/N/3 still works (15 in 20-D) but not on the axparallel cigar with recombination
+        self.mu = 1
+        self.use_abs_sigma = 1    # without it is a problem on 20=D axpar-cigar!!, but why?? Because dampi is just boarderline
+        self.use_abs_sigma_r = 1  # 
+        
+        self.randn = randn
+        self.x0 = array(x0, copy=True)
+        self.sigma0 = sigma0
+
+        self.cs = 1 / N**0.5  # evolution path for step-size(s)
+        self.damps = 1 
+        self.use_sign = 0
+        self.use_scalar_product = 0  # sometimes makes it somewhat worse on Rosenbrock, don't know why
+        self.csr = 1 / N**0.5  # cumulation for sigma_r
+        self.dampsr = (4 * N)**0.5
+        self.chi1 = (2/np.pi)**0.5
+        self.chiN = N**0.5*(1-1./(4.*N)+1./(21.*N**2)) # expectation of norm(randn(N,1))
+        self.initialize()  
+    def initialize(self):
+        """alias ``reset``, set all state variables to initial values"""
+        N = self.N
+        self.mean = array(self.x0, copy=True)
+        self.sigma = self.sigma0
+        self.sigmai = np.ones(N)
+        self.ps = np.zeros(N)  # path for individual and globalstep-size(s)
+        self.r = np.zeros(N)
+        self.pr = 0         # cumulation for zr = N(0,1)
+        self.sigma_r = 0 
+    def ask(self, popsize):
+        if popsize == 1:
+            raise NotImplementedError()
+        self.Z = [self.randn(self.N) for _i in xrange(popsize)]
+        self.zr = list(self.randn(popsize))
+        pop = [self.mean + self.sigma * (self.sigmai * self.Z[k]) 
+                + self.zr[k] * self.sigma_r * self.r 
+                for k in xrange(popsize)]
+        if not np.isfinite(pop[0][0]):
+            raise ValueError()
+        return pop
+    def tell(self, X, f):
+        """update """
+        mu = 1 if self.mu else int(len(f) / 4)
+        idx = np.argsort(f)[:mu]
+        zr = [self.zr[i] for i in idx]
+        Z = [self.Z[i] for i in idx]
+        X = [X[i] for i in idx]
+        xmean = np.mean(X, axis=0)
+        
+        self.ps *= 1 - self.cs
+        self.ps += (self.cs*(2-self.cs))**0.5 * mu**0.5 * np.mean(Z, axis=0)
+        self.sigma *= np.exp((self.cs/self.damps) * (sum(self.ps**2)**0.5 / self.chiN - 1))
+        if self.use_abs_sigma:
+            self.sigmai *= np.exp((1/self.dampi) * (np.abs(self.ps) / self.chi1 - 1))
+        else:
+            self.sigmai *= np.exp((1.3/self.dampi/2) * (self.ps**2 - 1))
+
+        self.pr *= 1 - self.csr
+        self.pr += (self.csr*(2-self.csr))**0.5 * mu**0.5 * np.mean(zr)
+        fac = 1
+        if self.use_sign:
+            fac = np.sign(self.pr)  # produces readaptations on the cigar
+        else:
+            self.pr = max([0, self.pr])
+        if self.use_scalar_product:
+            if np.sign(sum(self.r * (xmean - self.mean))) < 0: # and self.pr > 1:
+            # if np.sign(sum(self.r * self.ps)) < 0:
+                self.r *= -1
+        if self.eta_r:
+            self.r *= (1 - self.eta_r) * self.sigma_r
+            self.r += fac * self.eta_r * mu**0.5 * (xmean - self.mean)
+            self.r /= sum(self.r**2)**0.5 
+        if self.use_abs_sigma_r:
+            self.sigma_r *= np.exp((1/self.dampsr) * ((self.pr**2)**0.5 / self.chi1 - 1))
+        else:
+            # this is worse on the cigar, where the direction vector(!) behaves strangely
+            self.sigma_r *= np.exp((1/self.dampsr) * (self.pr**2 - 1) / 2)
+        self.sigma_r = max([self.sigma * sum(self.sigmai**2)**0.5 / 3, self.sigma_r])
+        # self.sigma_r = 0
+        self.mean = xmean
 def fmin(func, x0, sigma0=None, args=()
     # the follow string arguments are evaluated, besides the verb_filenameprefix
     , CMA_active='False  # exponential negative update, conducted after the original update'
     , CMA_activefac='1  # learning rate multiplier for active update'
     , CMA_cmean='1  # learning rate for the mean value'
     , CMA_diagonal='0*100*N/sqrt(popsize)  # nb of iterations with diagonal covariance matrix, True for always' # TODO 4/ccov_separable?
-    , CMA_eigenmethod='0  # 0=numpy-s eigh, -1=pygsl, otherwise cma.eig (slower)'
-    , CMA_mirrors='0  # values <0.5 are interpreted as fraction, values >1 as numbers (rounded), otherwise about 0.16 is used'
+    , CMA_eigenmethod='np.linalg.eigh  # 0=numpy-s eigh, -1=pygsl, otherwise cma.Misc.eig (slower)'
+    , CMA_elitist='False # elitism likely impairs global search performance'
+    , CMA_mirrors='popsize < 6  # values <0.5 are interpreted as fraction, values >1 as numbers (rounded), otherwise about 0.16 is used'
     , CMA_mu='None  # parents selection parameter, default is popsize // 2'
     , CMA_on='True  # False or 0 for no adaptation of the covariance matrix'
     , CMA_rankmu='True  # False or 0 for omitting rank-mu update of covariance matrix'
     , CMA_rankmualpha='0.3  # factor of rank-mu update if mu=1, subject to removal, default might change to 0.0'
     , CMA_dampfac='1  #v positive multiplier for step-size damping, 0.3 is close to optimal on the sphere'
     , CMA_teststds='None  # factors for non-isotropic initial distr. mainly for test purpose, see scaling_...'
+    , CMA_AII='False  # not yet tested'
     , bounds='[None, None]  # lower (=bounds[0]) and upper domain boundaries, each a scalar or a list/vector'
-    , check_points='None  # when repairing or injecting solutions, they should be checked (set to True)' 
+    , check_points='None  # when repairing or injecting solutions, they should be checked (index-list or True)' 
+    , eval_initial_x='False  # '
     , fixed_variables='None  # dictionary with index-value pairs like {0:1.1, 2:0.1} that are not optimized'
     , ftarget='-inf  #v target function value, minimization'
     , incpopsize='2  # in fmin(): multiplier for increasing popsize before each restart'
     , maxfevals='inf  #v maximum number of function evaluations'
-    , maxiter='long(100 + 50 * (N+3)**2 / sqrt(popsize))  #v maximum number of iterations'
+    , maxiter='100 + 50 * (N+3)**2 // popsize**0.5  #v maximum number of iterations'
     , mindx='0  #v minimal std in any direction, cave interference with tol*'
     , minstd='0  #v minimal std in any coordinate direction, cave interference with tol*'
     , noise_handling='False  # maximal number of evaluations for noise treatment, only fmin'
@@ -3842,7 +4136,8 @@ def fmin(func, x0, sigma0=None, args=()
                 optimal on the sphere'
         CMA_diagonal='0*100*N/sqrt(popsize)  # nb of iterations with diagonal
                 covariance matrix, True for always'
-        CMA_eigenmethod='0  # 0=numpy-s eigh, -1=pygsl, otherwise cma.eig (slower)'
+        CMA_eigenmethod='np.linalg.eigh  # 0=numpy-s eigh, -1=pygsl, alternative: Misc.eig (slower)'
+        CMA_elitist='False # elitism likely impairs global search performance'
         CMA_mirrors='0  # values <0.5 are interpreted as fraction, values >1 as numbers
                 (rounded), otherwise about 0.16 is used'
         CMA_mu='None  # parents selection parameter, default is popsize // 2'
@@ -3855,6 +4150,9 @@ def fmin(func, x0, sigma0=None, args=()
                 purpose, see scaling_...'
         bounds='[None, None]  # lower (=bounds[0]) and upper domain boundaries, each a
                 scalar or a list/vector'
+        check_points='None  # when repairing or injecting solutions, they should be checked 
+                (index-list or True)' 
+        eval_initial_x='False  # '
         fixed_variables='None  # dictionary with index-value pairs like {0:1.1, 2:0.1}
                 that are not optimized'
         ftarget='-inf  #v target function value, minimization'
@@ -3920,7 +4218,7 @@ def fmin(func, x0, sigma0=None, args=()
     ====== 
     Similar to `OOOptimizer.optimize()` and/or `CMAEvolutionStrategy.optimize()`, return the 
     list provided by `CMAEvolutionStrategy.result()` appended with an `OOOptimizer` and an 
-    `OptimDataLogger`::
+    `BaseDataLogger`::
     
         res = optim.result() + (optim.stop(), optim, logger)
     
@@ -4032,6 +4330,10 @@ def fmin(func, x0, sigma0=None, args=()
                 # ignore further input args and keep original options
             else:  # default case
                 es = CMAEvolutionStrategy(x0, sigma0, opts) 
+                if opts['eval_initial_x']:
+                    x = es.gp.pheno(es.mean, bounds=es.gp.bounds)
+                    es.best.update([x], None, [func(x, *args)], 1)
+                    es.countevals += 1
                 
             opts = es.opts  # processed options, unambiguous
                 
@@ -4049,6 +4351,13 @@ def fmin(func, x0, sigma0=None, args=()
                 X, fit = es.ask_and_eval(func, args, evaluations=noisehandler.evaluations, 
                                          aggregation=np.median) # treats NaN with resampling
                 # TODO: check args and in case use args=(noisehandler.evaluations, )
+                
+                if 11 < 3 and opts['vv']:  # inject a solution
+                    # use option check_point = [0]
+                    if 0 * np.random.randn() >= 0:
+                        X[0] = 0 + opts['vv'] * es.sigma**0 * np.random.randn(es.N)
+                        fit[0] = func(X[0], *args)
+                        # print fit[0]
 
                 es.tell(X, fit)  # prepare for next iteration
                 if opts['noise_handling']:
@@ -4071,14 +4380,14 @@ def fmin(func, x0, sigma0=None, args=()
             fmean = func(mean_pheno, *args)
             es.countevals += 1
             
-            es.best.update([mean_pheno], [fmean], es.countevals)
+            es.best.update([mean_pheno], None, [fmean], es.countevals)
             best.update(es.best)  # in restarted case
             
             # final message
             if opts['verb_disp']:
                 for k, v in es.stop().items():
                     print('termination on %s=%s (%s)' % (k, str(v), time.asctime()))
-                print('final/bestever f-value = %f %f' % (es.out['recent_f'], best.f))
+                print('final/bestever f-value = %e %e' % (es.best.last.f, best.f))
                 if es.N < 9:
                     print('mean solution: ' + str(es.gp.pheno(es.mean)))
                     print('std deviation: ' + str(es.sigma * sqrt(es.dC) * es.gp.scales))
@@ -4116,12 +4425,8 @@ def fmin(func, x0, sigma0=None, args=()
         if opts['verb_disp'] > 0:
             print(' in/outcomment ``raise`` in last line of cma.fmin to prevent/restore KeyboardInterrupt exception')
         raise  # cave: swallowing this exception can silently mess up experiments, if ctrl-C is hit
-        
-# end fmin()
-
-
 def plot(name=None, fig=None, abscissa=1, iteridx=None, plot_mean=True,  # TODO: plot_mean default should be False
-    foffset=1e-19, x_opt=None, fontsize=None):
+    foffset=1e-19, x_opt=None, fontsize=10):
     """
     plot data from files written by a `CMADataLogger`, 
     the call ``cma.plot(name, **argsdict)`` is a shortcut for 
@@ -4167,7 +4472,6 @@ def plot(name=None, fig=None, abscissa=1, iteridx=None, plot_mean=True,  # TODO:
 
     """
     CMADataLogger(name).plot(fig, abscissa, iteridx, plot_mean, foffset, x_opt, fontsize)
-
 try:
     show = pylab.show
     savefig = pylab.savefig   # we would like to be able to use cma.savefig() etc
@@ -4175,7 +4479,6 @@ try:
 except:
     def show():
         pass     
-
 def disp(name=None, idx=None):
     """displays selected data from (files written by) the class `CMADataLogger`. 
 
@@ -4209,7 +4512,6 @@ def disp(name=None, idx=None):
                          ).disp(idx)
 
 #____________________________________________________________
-
 def _fileToMatrix(file_name):
     """rudimentary method to read in data from a file"""
     # TODO: np.loadtxt() might be an alternative
@@ -4235,7 +4537,6 @@ def _fileToMatrix(file_name):
 
 #____________________________________________________________
 #____________________________________________________________
-
 class NoiseHandler(object):
     """Noise handling according to [Hansen et al 2009, A Method for Handling 
     Uncertainty in Evolutionary Optimization...] 
@@ -4422,7 +4723,7 @@ class NoiseHandler(object):
         lam = len(self.fit)
         idx = np.argsort(self.fit + self.fitre)
         ranks = np.argsort(idx).reshape((2, lam))
-        rankDelta = ranks[0] - ranks[1] - np.sign(ranks[0] - ranks[1]);
+        rankDelta = ranks[0] - ranks[1] - np.sign(ranks[0] - ranks[1])
 
         # compute rank change limits using both ranks[0] and ranks[1]
         r = np.arange(1, 2 * lam)  # 2 * lam - 2 elements
@@ -4452,7 +4753,6 @@ class NoiseHandler(object):
     
 #____________________________________________________________
 #____________________________________________________________
-
 class Sections(object):
     """plot sections through an objective function. A first 
     rational thing to do, when facing an (expensive) application. 
@@ -4632,12 +4932,47 @@ class Sections(object):
         return self
 #____________________________________________________________
 #____________________________________________________________
-
 class _Error(Exception):
     """generic exception of cma module"""
     pass
 
+#____________________________________________________________
+#____________________________________________________________
+#
+class ElapsedTime(object):
+    """32-bit C overflows after int(2**32/1e6) == 4294s about 72 min"""
+    def __init__(self):
+        self.tic0 = time.clock()
+        self.tic = self.tic0
+        self.lasttoc = time.clock()
+        self.lastdiff = time.clock() - self.lasttoc
+        self.time_to_add = 0
+        self.messages = 0
 
+    def __call__(self):
+        toc = time.clock()
+        if toc - self.tic >= self.lasttoc - self.tic: 
+            self.lastdiff = toc - self.lasttoc
+            self.lasttoc = toc
+        else:  # overflow, reset self.tic
+            if self.messages < 3:
+                self.messages += 1
+                print('  in cma.ElapsedTime: time measure overflow, last difference estimated from', 
+                        self.tic0, self.tic, self.lasttoc, toc, toc - self.lasttoc, self.lastdiff)
+            
+            self.time_to_add += self.lastdiff + self.lasttoc - self.tic
+            self.tic = toc  # reset 
+            self.lasttoc = toc
+        self.elapsedtime = toc - self.tic + self.time_to_add
+        return self.elapsedtime
+
+#____________________________________________________________
+#____________________________________________________________
+#
+class TimeIt(object):
+    def __init__(self, fct, args=(), seconds=1):
+        pass
+        
 class Misc(object):
     #____________________________________________________________
     #____________________________________________________________
@@ -4651,11 +4986,11 @@ class Misc(object):
         def aclamp(x, upper):
             return -Misc.MathHelperFunctions.apos(-x, -upper)
         @staticmethod
-        def expms(A):  
+        def expms(A, eig=np.linalg.eigh):  
             """matrix exponential for a symmetric matrix"""
             # TODO: check that this works reliably for low rank matrices
             # first: symmetrize A
-            D, B = np.linalg.eigh(A)
+            D, B = eig(A)
             return np.dot(B, (np.exp(D) * B).T)
         @staticmethod
         def amax(vec, vec_or_scalar):
@@ -4710,9 +5045,9 @@ class Misc(object):
             d = []
             for p in ps:
                 fi = p * n / 100 - 0.5
-                if fi < 0:  # maybe extrapolate?
+                if fi <= 0:  # maybe extrapolate?
                     d.append(data[0])
-                elif fi > n - 1:
+                elif fi >= n - 1:
                     d.append(data[-1])
                 else:
                     i = int(fi)
@@ -4723,6 +5058,30 @@ class Misc(object):
             """return stochastic round: floor(nb) + (rand()<remainder(nb))"""
             return nb // 1 + (np.random.rand(1)[0] < (nb % 1))
 
+        @staticmethod
+        def cauchy_with_variance_one():
+            n = np.random.randn() / np.random.randn()
+            while abs(n) > 1000:
+                n = np.random.randn() / np.random.randn()
+            return n / 25
+        @staticmethod
+        def standard_finite_cauchy(size=1):
+            try:
+                l = len(size)
+            except TypeError:
+                l = 0
+                
+            if l == 0:
+                return array([Mh.cauchy_with_variance_one() for _i in xrange(size)])
+            elif l == 1:
+                return array([Mh.cauchy_with_variance_one() for _i in xrange(size[0])])
+            elif l == 2:
+                return array([[Mh.cauchy_with_variance_one() for _i in xrange(size[1])] 
+                             for _j in xrange(size[0])])
+            else:
+                raise _Error('len(size) cannot be large than two')
+                
+        
     @staticmethod
     def likelihood(x, m=None, Cinv=None, sigma=1, detC=None):
         """return likelihood of x for the normal density N(m, sigma**2 * Cinv**-1)"""
@@ -5115,12 +5474,7 @@ class Misc(object):
         tred2(N, V, d, e)
         tql2(N, d, e, V)
         return (array(d), array(V))
-
 Mh = Misc.MathHelperFunctions
- 
-#____________________________________________________________
-#____________________________________________________________
-# 
 def pprint(to_be_printed):
     """nicely formated print"""
     try:
@@ -5131,10 +5485,6 @@ def pprint(to_be_printed):
     except ImportError:
         print('could not use pprint module, will apply regular print')
         print(to_be_printed)
-
-#____________________________________________________________
-#____________________________________________________________
-# 
 class Rotation(object):
     """Rotation class that implements an orthogonal linear transformation, 
     one for each dimension. Used to implement non-separable test functions. 
@@ -5168,9 +5518,8 @@ class Rotation(object):
             return np.dot(self.dicMatrices[str(N)].T, x)  # compute rotation
         else: 
             return np.dot(self.dicMatrices[str(N)], x)  # compute rotation
-
 # Use rotate(x) to rotate x 
-rotate = Rotation()  # should not be capitalized? 
+rotate = Rotation()
 
 #____________________________________________________________
 #____________________________________________________________
@@ -5180,7 +5529,6 @@ class FitnessFunctions(object):
 
     def __init__(self):
         self.counter = 0  # number of calls or any other practical use
-    
     def rot(self, x, fun, rot=1, args=()):
         """returns ``fun(rotation(x), *args)``, ie. `fun` applied to a rotated argument"""
         if len(np.shape(array(x))) > 1:  # parallelized
@@ -5193,29 +5541,37 @@ class FitnessFunctions(object):
             return fun(rotate(x, *args))
         else:
             return fun(x)
-
     def somenan(self, x, fun, p=0.1):
         """returns sometimes np.NaN, otherwise fun(x)"""
         if np.random.rand(1) < p:
             return np.NaN
         else:
             return fun(x)
-            
     def rand(self, x): 
         """Random test objective function"""
         return np.random.random(1)[0]
-    
     def linear(self, x):
         return -x[0]
-    
+    def lineard(self, x):
+        if 1 < 3 and any(array(x) < 0):
+            return np.nan
+        if 1 < 3 and sum([ (10 + i) * x[i] for i in xrange(len(x))]) > 50e3:
+            return np.nan
+        return -sum(x)
     def sphere(self, x):
         """Sphere (squared norm) test objective function"""
         # return np.random.rand(1)[0]**0 * sum(x**2) + 1 * np.random.rand(1)[0]
         return sum((x+0)**2) 
-
+    def spherewithoneconstraint(self, x):
+        return sum((x+0)**2) if x[0] > 1 else np.nan
+    def elliwithoneconstraint(self, x, idx=[-1]):
+        return self.ellirot(x) if all(array(x)[idx] > 1) else np.nan
+    
+    def spherewithnconstraints(self, x):
+        return sum((x+0)**2) if all(array(x) > 1) else np.nan
+        
     def noisysphere(self, x, noise=5.0):
         return sum((x+0)**2) * (1 + noise * np.random.randn() / len(x))
-
     def spherew(self, x):
         """Sphere (squared norm) with sum x_i = 1 test objective function"""
         # return np.random.rand(1)[0]**0 * sum(x**2) + 1 * np.random.rand(1)[0]
@@ -5223,7 +5579,6 @@ class FitnessFunctions(object):
         # return sum((x/s+0)**2) - 1/len(x) 
         # return sum((x/s)**2) - 1/len(x) 
         return -0.01*x[0] + abs(x[0])**-2 * sum(x[1:]**2)
-
     def partsphere(self, x):
         """Sphere (squared norm) test objective function"""
         self.counter += 1
@@ -5235,28 +5590,34 @@ class FitnessFunctions(object):
         #f = sum(x[i:i + N]**2)
         f = sum(x[np.random.randint(dim, size=N)]**2)
         return f
-    
     def sectorsphere(self, x):
         """asymmetric Sphere (squared norm) test objective function"""
-        return sum(x**2) + (1e6-1) * sum(x[x,0]**2)
-    
+        return sum(x**2) + (1e6-1) * sum(x[x<0]**2)
     def cornersphere(self, x):
-        """Sphere (squared norm) test objective function"""
-        if any(x < 0):
+        """Sphere (squared norm) test objective function constraint to the corner"""
+        nconstr = len(x) - 0
+        if any(x[:nconstr] < 1):
             return np.NaN
-        return sum(x**2)
-
+        return sum(x**2) - nconstr
+    def cornerelli(self, x):
+        """ """
+        if any(x < 1):
+            return np.NaN
+        return self.elli(x) - self.elli(np.ones(len(x)))
+    def cornerellirot(self, x):
+        """ """
+        if any(x < 1):
+            return np.NaN
+        return self.ellirot(x)
     def normalSkew(self, f):
         N = np.random.randn(1)[0]**2
         if N < 1:
             N = f * N  # diminish blow up lower part
         return N
-    
     def noiseC(self, x, func=sphere, fac=10, expon=0.8):
         f = func(self, x)
         N = np.random.randn(1)[0]/np.random.randn(1)[0]
         return max(1e-19, f + (float(fac)/len(x)) * f**expon * N)
-    
     def noise(self, x, func=sphere, fac=10, expon=1):
         f = func(self, x)
         #R = np.random.randn(1)[0]
@@ -5267,7 +5628,6 @@ class FitnessFunctions(object):
         # return max(1e-19, f * np.exp(sig * N / f**expon)) 
         # return max(1e-19, f * normalSkew(f**expon)**sig)
         return f + 10**R  # == f + f**(1+0.5*RN)
-    
     def cigar(self, x, rot=0):
         """Cigar test objective function"""
         if rot:
@@ -5275,7 +5635,6 @@ class FitnessFunctions(object):
         x = [x] if np.isscalar(x[0]) else x  # scalar into list
         f = [x[0]**2 + 1e6 * sum(x[1:]**2) for x in x]
         return f if len(f) > 1 else f[0]  # 1-element-list into scalar
-        
     def tablet(self, x, rot=0):
         """Tablet test objective function"""
         if rot:
@@ -5283,23 +5642,22 @@ class FitnessFunctions(object):
         x = [x] if np.isscalar(x[0]) else x  # scalar into list
         f = [1e6*x[0]**2 + sum(x[1:]**2) for x in x]
         return f if len(f) > 1 else f[0]  # 1-element-list into scalar
-
     def cigtab(self, y):
         """Cigtab test objective function"""
         X = [y] if np.isscalar(y[0]) else y
         f = [1e-4 * x[0]**2 + 1e4 * x[1]**2 + sum(x[2:]**2) for x in X]
         return f if len(f) > 1 else f[0]
-        
     def twoaxes(self, y):
         """Cigtab test objective function"""
         X = [y] if np.isscalar(y[0]) else y
         N2 = len(X[0]) // 2
         f = [1e6 * sum(x[0:N2]**2) + sum(x[N2:]**2) for x in X]
         return f if len(f) > 1 else f[0]
-     
     def ellirot(self, x):
         return fcts.elli(array(x), 1)
-       
+    def hyperelli(self, x):
+        N = len(x)
+        return sum((np.arange(1, N+1) * x)**2)
     def elli(self, x, rot=0, xoffset=0, cond=1e6, actuator_noise=0.0, both=False):
         """Ellipsoid test objective function"""
         if not np.isscalar(x[0]):  # parallel evaluation
@@ -5321,9 +5679,8 @@ class FitnessFunctions(object):
         if both:
             return (felli, ftrue)
         else:
+            # return felli  # possibly noisy value
             return ftrue # + np.random.randn()
-            # return felli
-        
     def elliconstraint(self, x, cfac = 1e8, tough=True, cond=1e6):  
         """ellipsoid test objective function with "constraints" """
         N = len(x)
@@ -5336,34 +5693,44 @@ class FitnessFunctions(object):
         else: 
             f += cfac * sum(max(0,c+1e-3)**2 for c in cvals)
         return f 
-
     def rosen(self, x):  
         """Rosenbrock test objective function"""
         x = [x] if np.isscalar(x[0]) else x  # scalar into list
         f = [sum(100.*(x[:-1]**2-x[1:])**2 + (1.-x[:-1])**2) for x in x]
         return f if len(f) > 1 else f[0]  # 1-element-list into scalar
-        
     def diffpow(self, x, rot=0):
         """Diffpow test objective function"""
         N = len(x)
         if rot:
             x = rotate(x)  
         return sum(np.abs(x)**(2.+4.*np.arange(N)/(N-1.)))**0.5
-        
     def ridge(self, x, expo=2):
         x = [x] if np.isscalar(x[0]) else x  # scalar into list
         f = [x[0] + 100*np.sum(x[1:]**2)**(expo/2.) for x in x]
         return f if len(f) > 1 else f[0]  # 1-element-list into scalar
-        
+    def ridgecircle(self, x, expo=0.5):
+        """happy cat by HG Beyer"""
+        a = len(x)
+        s = sum(x**2)
+        return ((s - a)**2)**(expo/2) + s/a + sum(x)/a
     def flat(self,x):
         return 1 
         return 1 if np.random.rand(1) < 0.9 else 1.1
         return np.random.randint(1,30)
+    def branin(self, x):
+        # in [0,15]**2
+        y = x[1]
+        x = x[0] + 5
+        return (y - 5.1*x**2 / 4 / np.pi**2 + 5 * x / np.pi - 6)**2 + 10 * (1 - 1/8/np.pi) * np.cos(x) + 10 - 0.397887357729738160000
+    def goldsteinprice(self, x):
+        x1 = x[0]
+        x2 = x[1]
+        return (1 + (x1 +x2 + 1)**2 * (19 - 14 * x1 + 3 * x1**2 - 14 * x2 + 6 * x1 * x2 + 3 * x2**2)) * (
+                30 + (2 * x1 - 3 * x2)**2 * (18 - 32 * x1 + 12 * x1**2 + 48 * x2 - 36 * x1 * x2 + 27 * x2**2)) - 3
     def griewank(self, x):
         # was in [-600 600]
         x = (600./5) * x
         return 1 - np.prod(np.cos(x/sqrt(1.+np.arange(len(x))))) + sum(x**2)/4e3
-
     def rastrigin(self, x):
         """Rastrigin test objective function"""
         if not np.isscalar(x[0]):
@@ -5372,7 +5739,13 @@ class FitnessFunctions(object):
             # return 10*N + sum(x**2 - 10*np.cos(2*np.pi*x), axis=1)
         N = len(x)
         return 10*N + sum(x**2 - 10*np.cos(2*np.pi*x))
-        
+    def schwefelelli(self, x):
+        s = 0
+        f = 0
+        for i in xrange(len(x)):
+            s += x[i]
+            f += s**2
+        return f
     def schwefelmult(self, x, pen_fac = 1e4):
         """multimodal Schwefel function with domain -500..500"""
         y = [x] if np.isscalar(x[0]) else x
@@ -5380,28 +5753,23 @@ class FitnessFunctions(object):
         f = array([418.9829*N - 1.27275661e-5*N - sum(x * np.sin(np.abs(x)**0.5))
                 + pen_fac * sum((abs(x) > 500) * (abs(x) - 500)**2) for x in y])
         return f if len(f) > 1 else f[0]
-        
     def optprob(self, x):
         n = np.arange(len(x)) + 1
         f = n * x * (1-x)**(n-1)
         return sum(1-f)
-    
     def lincon(self, x, theta=0.01):
         """ridge like linear function with one linear constraint"""
         if x[0] < 0:
             return np.NaN
         return theta * x[1] + x[0]
-        
 fcts = FitnessFunctions()
 Fcts = fcts  # for cross compatibility, as if the functions were static members of class Fcts
  
 #____________________________________________
 #____________________________________________________________
-
 def _test(module=None):  # None is fine when called from inside the module
     import doctest
     print(doctest.testmod(module))  # this is pretty coool!
-
 def process_test(stream=None):
     """ """
     import fileinput

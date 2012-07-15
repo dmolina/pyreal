@@ -1,5 +1,4 @@
 import numpy as np
-
 #class CMAES:
 #    """
 #    This class implement the CMA-ES algorithm
@@ -74,12 +73,19 @@ class SolisWets(LocalSearch):
 
     def getInitParameters(self, delta):
 	options = {}
-	options['delta']=delta
+	options['delta'] = delta
 	options['successes'] = options['fails'] = 0
 	options['bias'] = np.zeros(self.dim)
 	return options
 
     def clip(self, sol):
+	"""
+	Clip the solution to the domain search
+
+	sol -- solution to check the bound constraints
+	return solution with the bound checking. If for a dimension sol[i] > max, newsol[i] = max, 
+	If for a dimension, sol[i] < min, then newsol[i] = min
+	"""
 	return np.clip(sol, self.domain[0], self.domain[1])
 
     def getNeighbour(self, actual, options):
@@ -89,7 +95,7 @@ class SolisWets(LocalSearch):
 	diff = np.random.normal(options['delta'])
 	newsol = actual+options['bias']*diff
 	newsol = self.clip(newsol)
-	return (newsol,diff)
+	return newsol, diff
 
     def incremBias(self, dif, bias):
 	"""
@@ -97,16 +103,19 @@ class SolisWets(LocalSearch):
 	"""
 	return 0.2*bias + 0.4*(dif+bias)
 
-    def reduceBias(self,dif, bias):
+    def reduceBias(self, dif, bias):
 	"""
 	Reduce the bias
 	"""
 	return bias - 0.4*(dif+bias)
 
     def divideBias(self, bias):
+	"""
+	Divide the bias
+	"""
 	return bias/2.0
 
-    def improve(self,sol,fitness,maxeval,options):
+    def improve(self, sol, fitness, maxeval, options):
 	"""
 	Apply the Local Search process
 
@@ -114,10 +123,10 @@ class SolisWets(LocalSearch):
 	delta -- range of the initial search
 	"""
 	numEval = 0
-	assert fitness > 0
+	assert fitness >= 0
 
 	while (numEval < maxeval):
-	    (newsol,diff) = self.getNeighbour(sol,options)
+	    newsol, diff = self.getNeighbour(sol, options)
 	    newfitness = self.fitness(newsol)
 	    numEval += 1
 
@@ -151,4 +160,4 @@ class SolisWets(LocalSearch):
 	       options['fails'] = 0
 	       options['delta'] /= 2.0
 
-	return numEval
+	return sol, fitness 

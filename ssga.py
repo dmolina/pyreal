@@ -2,7 +2,9 @@ import numpy as np
 from numpy import array
 import earandom as random
 #import pyximport; pyximport.install(); import cutils
-from cutils import getParentByNAM,crossBLX,applyMutationBGA,getBestWorst
+from cutils import getParentByNAM,crossBLX,getBestWorst
+#from utils import getParentByNAM,crossBLX,getBestWorst
+
 
 class SSGA:
     """
@@ -110,7 +112,6 @@ class SSGA:
     def crossSlow(self,mother,parent,alpha=0.5):
 	diff = abs(mother-parent)
 	I=diff*alpha
-	points = np.array([mother,parent])
 	vmin = np.vectorize(np.min)
 	vmax = np.vectorize(np.max)
 	A=vmin(mother,parent)-I
