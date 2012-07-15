@@ -31,9 +31,11 @@ def main():
 
     fun = args.function
     dim = args.dimension
+    times = args.times
 
     print "Function: %d" %fun
     print "Dimension: %d" %dim
+    print "Times: %d" %times
     cec2005.config(fun, dim)
     domain = cec2005.domain(fun)
 #    domain = [-5, 5]
@@ -41,7 +43,7 @@ def main():
 #    dim=10
     ea = SSGA(domain=domain, size=60, dim=dim, fitness=cec2005.evaluate)
 
-    for x in xrange(25):
+    for x in xrange(times):
         ea.run(maxeval=dim*10000)
         [bestsol, bestfit] = ea.getBest()
         print "BestSol: ", bestsol

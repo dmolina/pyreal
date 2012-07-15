@@ -9,6 +9,7 @@ class ArgsCEC05:
 	self.parser = OptionParser()
     	self.parser.add_option("-f", "--function", action="store", type="int", dest="function", help="set the function to optimise", metavar="FUNCTION")
     	self.parser.add_option("-d", "--dimension", action="store", type="int", dest="dimension", help="set the dimensionality (2|10|30|50)", metavar="FUNCTION")
+    	self.parser.add_option("-t", "--times", action="store", type="int", dest="time", help="set the run number", metavar="FUNCTION")
 
 	(options,args)=self.parser.parse_args()
 
@@ -29,8 +30,21 @@ class ArgsCEC05:
                 print "option dimension: invalid value: '%d'" %dim
                 self.error = True
 
+	    if options.time is None:
+		self.time = 25
+	    else:
+		self.time = options.time
+
+            if not self.isTimeValide(self.time):
+                print "option run: invalid value: '%d'" %run
+                self.error = True
+
+
     def isFunctionValide(self, fun):
         return (fun >= 0 and fun <= 25)
+
+    def isTimeValide(self, times):
+        return (times > 0 and times <= 25)
     
     def isDimensionValide(self,dim):
         return dim in [2, 10, 30, 50]
@@ -53,3 +67,7 @@ class ArgsCEC05:
     @property
     def dimension(self):
 	return self.options.dimension
+
+    @property
+    def times(self):
+	return self.time
