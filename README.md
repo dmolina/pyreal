@@ -38,5 +38,5 @@ two modules:
 To set the the slow (utils.py) or fast (cutils.py) you only have to comment (or uncomment) the
 one of the following line:
 
-from cutils import getParentByNAM,crossBLX,getBestWorst #uncomment for fast version (cython)
-#from utils import getParentByNAM,crossBLX,getBestWorst #uncomment for slow version (python)
+   from cutils import getParentByNAM,crossBLX,getBestWorst #uncomment for fast version (cython)
+   #from utils import getParentByNAM,crossBLX,getBestWorst #uncomment for slow version (python)
