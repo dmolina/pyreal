@@ -2,10 +2,10 @@ pyreal
 ======
 
 Implementation in Python of evolutionary algorithms, used to make an study
-of the performance in Python using Psyco. 
+of the performance in Python using Cython. 
 This code is GPLv3. 
 
-You can read a post about that in http://dmolina.github.com, this is the 
+You can read a post about that in http://dmolina.github.com/blog/2012/07/15/increasing-performance-python/, this is the 
 source code used in this comparisons. 
 
 Install
