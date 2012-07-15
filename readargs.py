@@ -7,9 +7,9 @@ class ArgsCEC05:
     """
     def __init__(self):
 	self.parser = OptionParser()
-    	self.parser.add_option("-f", "--function", action="store", type="int", dest="function", help="set the function to optimise", metavar="FUNCTION")
+    	self.parser.add_option("-f", "--function", action="store", type="int", dest="function", help="set the function to optimise. number between [1, 25]", metavar="FUNCTION")
     	self.parser.add_option("-d", "--dimension", action="store", type="int", dest="dimension", help="set the dimensionality (2|10|30|50)", metavar="FUNCTION")
-    	self.parser.add_option("-t", "--times", action="store", type="int", dest="time", help="set the run number", metavar="FUNCTION")
+    	self.parser.add_option("-t", "--times", action="store", type="int", dest="time", help="set the number of time the algorithm is used (default=25)", metavar="FUNCTION")
 
 	(options,args)=self.parser.parse_args()
 
@@ -44,7 +44,7 @@ class ArgsCEC05:
         return (fun >= 0 and fun <= 25)
 
     def isTimeValide(self, times):
-        return (times > 0 and times <= 25)
+        return (times > 0)
     
     def isDimensionValide(self,dim):
         return dim in [2, 10, 30, 50]

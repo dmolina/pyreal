@@ -23,7 +23,21 @@ and everything should be compiled.
 Run
 ===
 
-You can use the algorithm 
+You can use the algorithm  in the following way:
+
+Usage: runcec.py [options]
+
+Options:
+  -h, --help            show this help message and exit
+  -f FUNCTION, --function=FUNCTION
+                        set the function to optimise (number between [1,25])
+  -d FUNCTION, --dimension=FUNCTION
+                        set the dimensionality (2|10|30|50)
+  -t FUNCTION, --times=FUNCTION
+                        set the run number (default=25)
+
+Example: 
+        python runcec.py -f 1 -d 10 -t 5
 
 Python and Cython versions
 ==========================
